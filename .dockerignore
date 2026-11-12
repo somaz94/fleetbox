@@ -10,3 +10,10 @@ api/
 LICENSE
 coverage*.out
 **/*_test.go
+web/node_modules
+web/dist
+web/coverage
+# Vite bakes VITE_* values from these into the public bundle.
+**/.env
+**/.env.*
+**/.DS_Store

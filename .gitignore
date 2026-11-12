@@ -30,4 +30,10 @@ Thumbs.db
 *.log
 
 # Dist
-dist/
+/dist/
+
+# Console: dependencies and the build; the placeholder keeps go:embed compiling
+web/node_modules/
+web/coverage/
+web/dist/*
+!web/dist/.gitkeep

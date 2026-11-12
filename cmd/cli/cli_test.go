@@ -151,6 +151,18 @@ func TestServe(t *testing.T) {
 	if _, err := os.Stat(db); err != nil {
 		t.Fatalf("store not created: %v", err)
 	}
+	// The console catch-all claims neither unknown API paths nor, without oidc,
+	// the login routes; its CSP header would show it answered.
+	for p, want := range map[string]int{"/auth/login": http.StatusNotFound, "/api/v1/nope": http.StatusNotFound} {
+		resp, err := http.Get(base + p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != want || resp.Header.Get("Content-Security-Policy") != "" {
+			t.Fatalf("%s = %d, served by the console: %v", p, resp.StatusCode, resp.Header)
+		}
+	}
 	cancel()
 	select {
 	case err := <-done:
@@ -235,9 +247,15 @@ targets:
 	if code, body := get("/api/v1/targets"); code != http.StatusUnauthorized || !strings.Contains(body, `"unauthorized"`) {
 		t.Fatalf("targets before login = %d %s", code, body)
 	}
-	// The login lands on "/", which the console will serve; until then it is a 404.
-	if code, _ := get("/auth/login"); code != http.StatusNotFound {
-		t.Fatalf("login = %d", code)
+	// The login lands on the console root: 200 once built, 503 before make web.
+	resp, err := browser.Get(base + "/auth/login")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.Request.URL.Path != "/" || resp.Header.Get("Content-Security-Policy") == "" ||
+		(resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusServiceUnavailable) {
+		t.Fatalf("login landed on %s (%d)", resp.Request.URL, resp.StatusCode)
 	}
 	if code, body := get("/api/v1/me"); code != http.StatusOK || !strings.Contains(body, `"user":"alice"`) ||
 		!strings.Contains(body, `"targets":[{"name":"a","role":"viewer"}]`) {

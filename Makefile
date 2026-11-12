@@ -1,4 +1,4 @@
-.PHONY: build test cover generate fmt vet lint check-config docker-build helm-lint clean help
+.PHONY: build web test web-test cover generate generate-go generate-web fmt vet lint check-config docker-build helm-lint clean help
 
 APP_NAME=fleetbox
 MODULE=github.com/somaz94/fleetbox
@@ -8,12 +8,19 @@ BUILD_DATE=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 LDFLAGS=-ldflags "-s -w -X $(MODULE)/cmd/cli.Version=$(VERSION) -X $(MODULE)/cmd/cli.GitCommit=$(GIT_COMMIT) -X $(MODULE)/cmd/cli.BuildDate=$(BUILD_DATE)"
 # Two workers keep a laptop responsive; CI may raise it.
 TEST_P ?= 2
+GO_FILES = $(shell find . -path ./web/node_modules -prune -o -name '*.go' -print)
 
-build: ## Build the binary into bin/
+build: ## Build the binary into bin/, embedding whatever web/dist holds (run make web first)
 	CGO_ENABLED=0 go build $(LDFLAGS) -o bin/$(APP_NAME) ./cmd/
+
+web: ## Build the console into web/dist
+	cd web && npm ci && npm run build
 
 test: ## Run unit tests with the race detector and coverage
 	go test -p $(TEST_P) -race -cover ./...
+
+web-test: ## Typecheck and test the console
+	cd web && npm run typecheck && npx vitest run --maxWorkers=$(TEST_P)
 
 cover: ## Print the coverage total the 90% rule applies to
 	go test -p $(TEST_P) -coverprofile=coverage.out ./...
@@ -21,17 +28,22 @@ cover: ## Print the coverage total the 90% rule applies to
 	grep -vE '\.gen\.go:|/cmd/main\.go:|/providertest/|/oidctest/' coverage.out > coverage.hand.out
 	go tool cover -func=coverage.hand.out | tail -1
 
-generate: ## Regenerate internal/api/api.gen.go from api/openapi.yaml
+generate: generate-go generate-web ## Regenerate the server code and the console types from api/openapi.yaml
+
+generate-go: ## Regenerate internal/api/api.gen.go
 	go tool oapi-codegen -config api/oapi-codegen.yaml api/openapi.yaml
 
+generate-web: ## Regenerate web/src/api/schema.d.ts
+	cd web && npm run generate
+
 fmt: ## Format code
-	gofmt -w .
+	gofmt -w $(GO_FILES)
 
 vet: ## Run go vet
 	go vet ./...
 
 lint: vet ## Check formatting and vet
-	@test -z "$$(gofmt -l .)" || { gofmt -l .; echo "run make fmt"; exit 1; }
+	@test -z "$$(gofmt -l $(GO_FILES))" || { gofmt -l $(GO_FILES); echo "run make fmt"; exit 1; }
 
 check-config: build ## Validate a configuration file (usage: make check-config CONFIG=path)
 	@test -n "$(CONFIG)" || { echo "usage: make check-config CONFIG=path"; exit 1; }

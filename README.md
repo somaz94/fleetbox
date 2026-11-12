@@ -2,7 +2,7 @@
 
 A web console for containers that run outside Kubernetes: Amazon ECS services and plain Docker hosts in one view, with what runs, which image digest, whether it is healthy and why it last stopped. It runs as one service in a Kubernetes cluster and is the only component holding the cloud and host credentials.
 
-> **Status**: early development, not released. The provider layer (ECS, Docker over SSH), the poller, the cache, the store, the read API and OIDC sign-in with group-to-target roles exist; the console does not yet. The roadmap is in [docs/DESIGN.md](docs/DESIGN.md#roadmap).
+> **Status**: early development, not released. The provider layer (ECS, Docker over SSH), the poller, the cache, the store, the read API, OIDC sign-in with group-to-target roles and a read-only console exist; operations do not yet. The roadmap is in [docs/DESIGN.md](docs/DESIGN.md#roadmap).
 
 <br/>
 
@@ -33,13 +33,17 @@ Portainer and its peers manage Docker hosts but not ECS; e1s and the AWS console
 ## Development
 
 ```bash
-make build   # bin/fleetbox
-make test    # unit tests with the race detector
+make web     # build the console (Node 22 or later) into web/dist
+make build   # bin/fleetbox, with the console embedded
+make test    # Go unit tests with the race detector
+make web-test # console typecheck and tests
 make lint    # gofmt and go vet
 make help    # every target
 ```
 
-No test reaches a real cloud, host or identity provider: providers run against fakes, the SSH transport against an in-process SSH server, and sign-in against an in-process OIDC issuer.
+For console work, run the server on loopback and `npm run dev` in `web/`: Vite proxies `/api` and `/auth` to `http://127.0.0.1:8080` (override with `FLEETBOX_URL`).
+
+No test reaches a real cloud, host or identity provider: providers run against fakes, the SSH transport against an in-process SSH server, sign-in against an in-process OIDC issuer, and the console against MSW handlers typed by the API spec.
 
 <br/>
 

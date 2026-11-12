@@ -202,8 +202,10 @@ Access to the Docker API is root on that host, which is why targets default to r
 
 ## Console
 
-- Vite, React, TypeScript, TanStack Query, React Router, Tailwind with shadcn/ui. The build is embedded into the Go binary with `go:embed`, so the image stays one artefact.
-- Lists and details refetch from the server cache on an interval. SSE is used for logs only.
+- Vite, React, TypeScript, TanStack Query, React Router, Tailwind with shadcn/ui. The build is embedded into the Go binary with `go:embed`, so the image stays one artefact. API types come from `api/openapi.yaml` through `openapi-typescript`, and requests go through `openapi-fetch`, so a contract change fails the console's typecheck.
+- The server answers every path outside `/api`, `/auth` and the probes with the build: a file when one exists, `index.html` otherwise, so client-side routes survive a reload. Hashed assets are cached for a year, `index.html` never. A Content-Security-Policy allows only the build's own scripts, styles and connections, with no inline code and no framing.
+- A 401 from the API sends the browser to `/auth/login` with the current path as `next`. Every request other than a `GET` carries the CSRF header. Sign-out is offered only when `/api/v1/me` reports `oidc` mode.
+- Lists and details refetch from the server cache on an interval; the event timeline, which the provider answers fresh, loads once and on request. SSE is used for logs only. A failed log stream stops rather than letting `EventSource` reconnect, which would replay the tail, and offers a reconnect.
 - Screens: dashboard (targets, stale or failing targets, open findings), services (filterable list), service detail (instances, revision, rollout, events, recent stop reasons), logs, findings, audit log.
 - Operations open a confirmation that requires typing the service name. The console hides what the user may not do; the server enforces it regardless.
 - Log lines are untrusted text and are rendered as text, never as HTML.
@@ -327,7 +329,7 @@ Thresholds are configuration, and each finding carries the evidence it was raise
 ## Testing
 
 - Go: table-driven unit tests; providers against fake SDK clients through `providertest`; HTTP handlers through `httptest` with a fake provider; coverage 90% or above, excluding `main`.
-- Console: Vitest and Testing Library, with MSW mocks generated from the OpenAPI spec.
+- Console: Vitest and Testing Library against MSW handlers typed by the OpenAPI spec through `openapi-msw`, so a fixture that drifts from the contract fails to compile.
 - End-to-end: the server with fake providers, driven by Playwright. The Docker provider also runs against a real local daemon over SSH in CI.
 - No test calls a real cloud API.
 

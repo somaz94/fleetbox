@@ -2,7 +2,7 @@
 
 Web console for containers outside Kubernetes: Amazon ECS and Docker hosts first, other platforms as providers. Runs as one service in a Kubernetes cluster and serves a React console plus a versioned JSON API. Go backend.
 
-> **Status**: v0.2 in progress. Providers (ECS, Docker over SSH), the poller, the cache, the store, the read API (`api/openapi.yaml`), OIDC sign-in with role mapping, the Helm chart and `serve` / `check` exist; operations and the console do not. `docs/DESIGN.md` is the source of truth for scope and decisions.
+> **Status**: v0.2 in progress. Providers (ECS, Docker over SSH), the poller, the cache, the store, the read API (`api/openapi.yaml`), OIDC sign-in with role mapping, the read-only console, the Helm chart and `serve` / `check` exist; operations do not. `docs/DESIGN.md` is the source of truth for scope and decisions.
 
 <br/>
 
@@ -13,7 +13,9 @@ make build   # bin/fleetbox
 make test    # go test -race with coverage, two packages at a time
 make lint    # gofmt check and go vet
 make cover   # the coverage total the 90% rule applies to
-make generate # regenerate internal/api/api.gen.go after editing api/openapi.yaml
+make web     # build the console into web/dist (make build embeds whatever is there)
+make web-test # typecheck and test the console
+make generate # regenerate api.gen.go and web/src/api/schema.d.ts after editing api/openapi.yaml
 make helm-lint # lint and render the chart
 make docker-build # local image as fleetbox:dev
 ```
@@ -35,6 +37,8 @@ One role per directory:
 - `internal/api`: `/api/v1`; `api.gen.go` is generated, `server.go` implements it, `logs.go` is the hand-written SSE endpoint
 - `internal/store`: SQLite persistence for stop history, the audit log and login sessions
 - `internal/auth`: the three auth modes (none, oidc, proxy), group-to-target roles and the CSRF check; `oidctest` is an in-process OIDC issuer for tests
+- `internal/console`: serves the embedded build, with the CSP and cache headers
+- `web`: the React console (Vite); `embed.go` embeds `web/dist`, `src/api/schema.d.ts` is generated, `src/test` holds the MSW server and fixtures
 - `helm/fleetbox`: the chart; `ci/default-values.yaml` is what CI renders and checks
 
 <br/>
@@ -64,6 +68,11 @@ The reasoning for each is in `docs/DESIGN.md`. Changing one means changing that 
 - **Authorisation lives in `internal/api`**: every handler, the hand-written logs endpoint included, checks the caller's role on the target and answers 404 for a hidden target. A new endpoint taking a target must do the same.
 - **The chart and the config schema must agree**: CI renders the chart and runs `fleetbox check` on the result. A new config key needs the chart's `config` block (or `_helpers.tpl`) to produce it.
 - **Release automation** (`release.yml`, `helm-release.yml`, `cliff.toml`) follows the sibling repositories and is not changed without the user's approval. `RELEASE.md` is empty in the repository on purpose; git-cliff writes it during a release. Bump `helm/fleetbox/Chart.yaml` `version` in the release commit; `appVersion` follows the tag.
+- **Console placeholder**: `web/dist/.gitkeep` keeps `go:embed` compiling before `make web`; Vite empties `dist` on every build and copies `web/public/.gitkeep` back. Without a build the server answers 503 on `/`.
+- **`web/node_modules` is excluded by an `ignore` directive in `go.mod`**, and `make lint`/`make fmt` list Go files without it. Keep both when touching either.
+- **TypeScript stays on 5.x** while `openapi-typescript` needs its compiler API, which TypeScript 7 does not offer. Regenerate `web/package-lock.json` with npm 11 (`npx npm@11 install`), the version the Node 24 image runs `npm ci` with; npm 10 crashes resolving this tree.
+- **`openapi-fetch` must look `fetch` up per call** (`web/src/lib/api.ts`), or MSW in tests never sees the requests.
+- **The console CSP forbids inline scripts and styles.** A library that injects a `<style>` or a `style` attribute will be blocked; check the browser console after adding one.
 - **Test data**: instance IDs in fixtures must be unique in their short form (Docker shows 12 characters); the conformance suite rejects duplicates.
 
 <br/>

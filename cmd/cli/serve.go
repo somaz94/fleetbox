@@ -13,9 +13,11 @@ import (
 	"github.com/somaz94/fleetbox/internal/api"
 	"github.com/somaz94/fleetbox/internal/auth"
 	"github.com/somaz94/fleetbox/internal/config"
+	"github.com/somaz94/fleetbox/internal/console"
 	"github.com/somaz94/fleetbox/internal/core"
 	"github.com/somaz94/fleetbox/internal/inventory"
 	"github.com/somaz94/fleetbox/internal/store"
+	"github.com/somaz94/fleetbox/web"
 )
 
 const shutdownTimeout = 10 * time.Second
@@ -77,7 +79,7 @@ func serve(ctx context.Context, cfg *config.Config, ln net.Listener, logLevel st
 	}()
 
 	c := core.New(targets, cache, poller, st, core.BuildInfo{Version: Version, Commit: GitCommit, Date: BuildDate})
-	srv := &http.Server{Handler: newMux(api.NewHandler(c, authn, log), authn.Routes()), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Handler: newMux(api.NewHandler(c, authn, log), authn.Routes(), console.Handler(web.Dist())), ReadHeaderTimeout: 10 * time.Second}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
 	log.Info("serving", "addr", ln.Addr().String(), "targets", len(targets), "auth", authn.Mode(), "version", Version)
@@ -100,16 +102,20 @@ func serve(ctx context.Context, cfg *config.Config, ln net.Listener, logLevel st
 	return nil
 }
 
-// newMux serves the probes, the API and, in oidc mode, the login routes.
-// Readiness means configuration loaded and the store opened, which is true
-// once the server is listening; it deliberately does not depend on any target
-// or the identity provider being reachable.
-func newMux(apiHandler, authHandler http.Handler) *http.ServeMux {
+// newMux serves the probes, the API, the console and, in oidc mode, the login
+// routes. Readiness means configuration loaded and the store opened, which is
+// true once the server is listening; it deliberately does not depend on any
+// target or the identity provider being reachable.
+func newMux(apiHandler, authHandler, consoleHandler http.Handler) *http.ServeMux {
 	mux := http.NewServeMux()
+	mux.Handle("/", consoleHandler)
 	mux.Handle("/api/", apiHandler)
-	if authHandler != nil {
-		mux.Handle("/auth/", authHandler)
+	// Without oidc there are no login routes; a 404 says so, where the
+	// console catch-all would answer 200 with its page.
+	if authHandler == nil {
+		authHandler = http.NotFoundHandler()
 	}
+	mux.Handle("/auth/", authHandler)
 	ok := func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Write([]byte("ok\n"))

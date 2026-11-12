@@ -1,5 +1,13 @@
-# The builder stays on the build host's platform and cross-compiles, instead of
-# running the Go toolchain under QEMU for the other architecture.
+# Both build stages stay on the build host's platform: the console is
+# architecture-independent, and Go cross-compiles instead of running under QEMU.
+FROM --platform=${BUILDPLATFORM} node:24-alpine AS web
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --no-audit --no-fund
+COPY web/ ./
+RUN npm run build
+
 FROM --platform=${BUILDPLATFORM} golang:1.27 AS builder
 ARG TARGETOS
 ARG TARGETARCH
@@ -15,6 +23,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 COPY cmd/ cmd/
 COPY internal/ internal/
+COPY web/embed.go web/
+COPY --from=web /web/dist web/dist
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \

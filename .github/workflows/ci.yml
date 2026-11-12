@@ -40,7 +40,7 @@ jobs:
 
       - name: Generated code is current
         run: |
-          make generate
+          make generate-go
           git diff --exit-code internal/api/api.gen.go
 
       - name: Test
@@ -52,6 +52,41 @@ jobs:
           total=$(go tool cover -func=coverage.hand.out | awk '/^total:/ {sub("%", "", $3); print $3}')
           echo "coverage ${total}%"
           awk -v t="$total" 'BEGIN { exit (t + 0 < 90) }'
+
+  console:
+    name: Console
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Generated types are current
+        run: |
+          npm run generate
+          git diff --exit-code src/api/schema.d.ts
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test (90% coverage minimum)
+        run: npm run coverage
+
+      - name: Build
+        run: npx vite build
 
   build:
     name: Build
@@ -116,7 +151,7 @@ jobs:
 
   docker:
     name: Docker Build
-    needs: unit-tests
+    needs: [unit-tests, console]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
