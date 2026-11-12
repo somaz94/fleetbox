@@ -26,6 +26,7 @@ const (
 
 	labelProject = "com.docker.compose.project"
 	labelService = "com.docker.compose.service"
+	labelOneOff  = "com.docker.compose.oneoff"
 	labelPrefix  = "fleetbox.io/"
 
 	shortIDLen      = 12
@@ -81,7 +82,43 @@ func NewWithDialer(target string, d Dialer) *Provider {
 func (p *Provider) Kind() string { return Kind }
 
 func (p *Provider) Capabilities() provider.Capabilities {
-	return provider.Capabilities{Logs: true, FollowLogs: true, Events: true}
+	return provider.Capabilities{Logs: true, FollowLogs: true, Events: true, Restart: true}
+}
+
+// Restart restarts the service's containers one after another, so a service
+// with several replicas keeps some of them up, and stops at the first failure.
+// Like `docker compose restart` it skips one-off containers from
+// `docker compose run`: starting an exited one would run its command again.
+func (p *Provider) Restart(ctx context.Context, ref model.ServiceRef) error {
+	summaries, err := p.engine.listContainers(ctx)
+	if err != nil {
+		return err
+	}
+	var ids []string
+	for _, s := range summaries {
+		if p.serviceRef(s.Labels, containerName(s.Names)) == ref && s.Labels[labelOneOff] != "True" {
+			ids = append(ids, s.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return fmt.Errorf("service %s: %w", ref, provider.ErrNotFound)
+	}
+	for i, id := range ids {
+		err := p.engine.restartContainer(ctx, id)
+		if errors.Is(err, provider.ErrNotFound) {
+			continue // removed or recreated since the list
+		}
+		if err != nil {
+			return fmt.Errorf("restart container %s (%d of %d): %w", shortID(id), i+1, len(ids), err)
+		}
+	}
+	return nil
+}
+
+// Scale is not supported: a compose service's replica count lives in a
+// compose file on the host, which fleetbox does not edit.
+func (p *Provider) Scale(context.Context, model.ServiceRef, int) error {
+	return fmt.Errorf("docker: scale: %w", provider.ErrUnsupported)
 }
 
 func (p *Provider) Inventory(ctx context.Context) (model.Inventory, error) {

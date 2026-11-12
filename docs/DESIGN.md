@@ -137,7 +137,7 @@ Tasks started outside a service (`RunTask`) are not listed. A container whose aw
 
 ECS keeps stopped tasks visible only for a short time. The poller records every stopped task's reason into the store, so "why did this stop" still answers after ECS has forgotten.
 
-A target covers every cluster in its region unless `clusters` names a subset. Each target assumes a role. Read and operate are separate roles: a target configured without `operateRoleArn` cannot be operated, whatever the user's role.
+A target covers every cluster in its region unless `clusters` names a subset. Each target assumes a role. Read and operate are separate roles: a target configured without `operateRoleArn` cannot be operated, whatever the user's role. The operate role needs `ecs:UpdateService`; both roles are assumed from the server's own identity, never one from the other.
 
 ### Docker
 
@@ -147,7 +147,7 @@ A target covers every cluster in its region unless `clusters` names a subset. Ea
 | Digest | image inspect `RepoDigests` |
 | Events | the `events` stream, which also keeps the cache current without polling |
 | Logs | container logs stream, demultiplexed |
-| Restart | container restart for every container of the service |
+| Restart | container restart for each container of the service in turn, stopping at the first failure; one-off containers from `docker compose run` are left alone, as `docker compose restart` does |
 | Scale | not supported: the compose file lives on the host |
 
 - The client is a minimal Engine API client covering only the calls above, not the Docker SDK, which would pull a large dependency tree for six requests. Paths are unversioned so each daemon answers in its own current API version; daemons have raised their minimum supported version before.

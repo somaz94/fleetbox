@@ -99,12 +99,12 @@ type apiError struct {
 	Message string `json:"message"`
 }
 
-func (e *engine) do(ctx context.Context, path string, q url.Values) (*http.Response, error) {
+func (e *engine) do(ctx context.Context, method, path string, q url.Values) (*http.Response, error) {
 	u := "http://docker" + path
 	if len(q) > 0 {
 		u += "?" + q.Encode()
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	req, err := http.NewRequestWithContext(ctx, method, u, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +129,7 @@ func (e *engine) do(ctx context.Context, path string, q url.Values) (*http.Respo
 }
 
 func (e *engine) getJSON(ctx context.Context, path string, q url.Values, out any) error {
-	resp, err := e.do(ctx, path, q)
+	resp, err := e.do(ctx, http.MethodGet, path, q)
 	if err != nil {
 		return err
 	}
@@ -138,6 +138,16 @@ func (e *engine) getJSON(ctx context.Context, path string, q url.Values, out any
 		return fmt.Errorf("docker %s: decode: %w", path, err)
 	}
 	return nil
+}
+
+// restartContainer stops and starts a container, waiting for it like
+// `docker restart` does.
+func (e *engine) restartContainer(ctx context.Context, id string) error {
+	resp, err := e.do(ctx, http.MethodPost, "/containers/"+url.PathEscape(id)+"/restart", nil)
+	if err != nil {
+		return err
+	}
+	return resp.Body.Close()
 }
 
 func (e *engine) listContainers(ctx context.Context) ([]containerSummary, error) {
@@ -170,7 +180,7 @@ func (e *engine) events(ctx context.Context, since, until time.Time, filters map
 	if !until.IsZero() {
 		q.Set("until", fmt.Sprint(until.Unix()))
 	}
-	resp, err := e.do(ctx, "/events", q)
+	resp, err := e.do(ctx, http.MethodGet, "/events", q)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -185,7 +195,7 @@ func (e *engine) logs(ctx context.Context, id string, opts provider.LogOptions, 
 	if !opts.Since.IsZero() {
 		q.Set("since", fmt.Sprint(opts.Since.Unix()))
 	}
-	resp, err := e.do(ctx, "/containers/"+url.PathEscape(id)+"/logs", q)
+	resp, err := e.do(ctx, http.MethodGet, "/containers/"+url.PathEscape(id)+"/logs", q)
 	if err != nil {
 		return nil, err
 	}

@@ -34,6 +34,7 @@ type fakeDaemon struct {
 	images     map[string]imageJSON
 	events     []eventMessage
 	queries    map[string][]string // path -> raw queries
+	posts      []string            // paths of POST requests, in order
 	fail       map[string]int      // path prefix -> status to answer
 }
 
@@ -44,6 +45,9 @@ func (d *fakeDaemon) record(r *http.Request) {
 		d.queries = map[string][]string{}
 	}
 	d.queries[r.URL.Path] = append(d.queries[r.URL.Path], r.URL.RawQuery)
+	if r.Method == http.MethodPost {
+		d.posts = append(d.posts, r.URL.Path)
+	}
 }
 
 func (d *fakeDaemon) find(id string) (fakeContainer, bool) {
@@ -94,6 +98,13 @@ func (d *fakeDaemon) handler() http.Handler {
 		if r.URL.Query().Get("until") == "" {
 			<-r.Context().Done() // a live watch stays open
 		}
+	})
+	mux.HandleFunc("POST /containers/{id}/restart", func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := d.find(r.PathValue("id")); !ok {
+			writeErr(w, http.StatusNotFound, "No such container")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /containers/{id}/logs", func(w http.ResponseWriter, r *http.Request) {
 		c, ok := d.find(r.PathValue("id"))
@@ -589,5 +600,47 @@ func TestMappings(t *testing.T) {
 	}
 	if _, ok := mapEvent(webRef, eventMessage{Action: "attach"}); ok {
 		t.Fatal("noise event kept")
+	}
+}
+
+func TestRestart(t *testing.T) {
+	d := newDaemon()
+	migrate := running("eeeeeeeeee01ffff", "shop-web-run-1", "shop", "web", "sha256:img1", map[string]string{labelOneOff: "True"})
+	migrate.summary.State = "exited"
+	d.containers = append(d.containers, migrate)
+	p := serve(t, d)
+	ctx := context.Background()
+	if err := p.Restart(ctx, webRef); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(d.posts, " "); got != "/containers/aaaaaaaaaa01ffff/restart /containers/aaaaaaaaaa02ffff/restart" {
+		t.Fatalf("posts = %s", got)
+	}
+	standalone := model.ServiceRef{Target: "host1", Scope: StandaloneScope, Name: "redis"}
+	if err := p.Restart(ctx, standalone); err != nil || d.posts[len(d.posts)-1] != "/containers/dddddddddd01ffff/restart" {
+		t.Fatalf("standalone restart: %v, posts %v", err, d.posts)
+	}
+	if err := p.Restart(ctx, model.ServiceRef{Target: "host1", Scope: "shop", Name: "nope"}); !errors.Is(err, provider.ErrNotFound) {
+		t.Fatalf("unknown service: %v", err)
+	}
+
+	// A container recreated since the list is skipped; any other failure stops the rest.
+	d.posts = nil
+	d.fail = map[string]int{"/containers/aaaaaaaaaa01ffff/restart": http.StatusNotFound}
+	if err := p.Restart(ctx, webRef); err != nil || len(d.posts) != 2 {
+		t.Fatalf("vanished container: %v, posts %v", err, d.posts)
+	}
+	d.posts = nil
+	d.fail = map[string]int{"/containers/aaaaaaaaaa01ffff/restart": http.StatusInternalServerError}
+	err := p.Restart(ctx, webRef)
+	if err == nil || !strings.Contains(err.Error(), "aaaaaaaaaa01 (1 of 2)") || len(d.posts) != 1 {
+		t.Fatalf("failing first container: %v, posts %v", err, d.posts)
+	}
+	d.fail = map[string]int{"/containers/json": http.StatusInternalServerError}
+	if err := p.Restart(ctx, webRef); err == nil {
+		t.Fatal("restart with a failing list")
+	}
+	if err := p.Scale(ctx, webRef, 2); !errors.Is(err, provider.ErrUnsupported) {
+		t.Fatalf("scale: %v", err)
 	}
 }

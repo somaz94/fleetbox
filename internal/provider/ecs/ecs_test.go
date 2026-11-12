@@ -201,6 +201,31 @@ func (f *fakeLogs) GetLogEvents(ctx context.Context, in *cloudwatchlogs.GetLogEv
 	}
 }
 
+func (f *fakeECS) UpdateService(ctx context.Context, in *ecs.UpdateServiceInput, _ ...func(*ecs.Options)) (*ecs.UpdateServiceOutput, error) {
+	if err := f.begin(ctx, "UpdateService"); err != nil {
+		return nil, err
+	}
+	if err := f.cluster(in.Cluster); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, s := range f.services[*in.Cluster] {
+		if aws.ToString(s.ServiceName) != aws.ToString(in.Service) {
+			continue
+		}
+		if in.DesiredCount != nil {
+			s.DesiredCount = *in.DesiredCount
+		}
+		if in.ForceNewDeployment {
+			s.Deployments = []types.Deployment{{Status: aws.String("PRIMARY"), RolloutState: types.DeploymentRolloutStateInProgress, CreatedAt: aws.Time(t0.Add(time.Hour))}}
+		}
+		f.services[*in.Cluster][i] = s
+		return &ecs.UpdateServiceOutput{Service: &s}, nil
+	}
+	return nil, &types.ServiceNotFoundException{Message: aws.String("service not found")}
+}
+
 func svc(cluster, name string, desired, running int32, tags ...types.Tag) types.Service {
 	return types.Service{
 		ServiceName:    aws.String(name),
@@ -291,7 +316,7 @@ func newTestProvider(f *fakeECS, logs *fakeLogs, regions *[]string) *Provider {
 			*regions = append(*regions, r)
 		}
 		return logs
-	})
+	}).WithOperateClient(f)
 	p.followInterval = time.Millisecond
 	return p
 }
@@ -696,6 +721,16 @@ func TestNew(t *testing.T) {
 	if ep.Kind() != Kind || !ep.Capabilities().Logs || ep.Capabilities().Restart {
 		t.Fatalf("provider = %+v", ep.Capabilities())
 	}
+	if err := ep.Restart(context.Background(), apiRef); !errors.Is(err, provider.ErrUnsupported) {
+		t.Fatalf("restart without an operate role: %v", err)
+	}
+	p, err = New(target("region: ap-northeast-2\noperateRoleArn: arn:aws:iam::123456789012:role/fleetbox-operate"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := p.Capabilities(); !c.Restart || !c.Scale {
+		t.Fatalf("capabilities with an operate role = %+v", c)
+	}
 	if a, b := ep.logs("us-east-1"), ep.logs("us-east-1"); a != b {
 		t.Fatal("logs clients are not cached per region")
 	}
@@ -707,5 +742,38 @@ func TestNew(t *testing.T) {
 	}
 	if _, err := provider.New(target("region: ap-northeast-2")); err != nil {
 		t.Fatalf("registry: %v", err)
+	}
+}
+
+func TestOperations(t *testing.T) {
+	f := newFake()
+	p := newTestProvider(f, &fakeLogs{}, nil)
+	ctx := context.Background()
+	if err := p.Scale(ctx, apiRef, 5); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Restart(ctx, apiRef); err != nil {
+		t.Fatal(err)
+	}
+	d, err := p.Service(ctx, apiRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *d.Service.Desired != 5 || d.Service.Rollout == nil || !d.Service.Rollout.StartedAt.Equal(t0.Add(time.Hour)) {
+		t.Fatalf("service after scale and restart = %+v", d.Service)
+	}
+	if f.calls["UpdateService"] != 2 {
+		t.Fatalf("calls = %v", f.calls)
+	}
+	if err := p.Restart(ctx, model.ServiceRef{Target: "prod", Scope: "nope", Name: "api"}); !errors.Is(err, provider.ErrNotFound) {
+		t.Fatalf("unknown cluster: %v", err)
+	}
+	if err := p.Scale(ctx, apiRef, -1); err == nil {
+		t.Fatal("negative desired count accepted")
+	}
+	inactive := newFake()
+	inactive.err = &types.ServiceNotActiveException{Message: aws.String("inactive")}
+	if err := newTestProvider(newFake(), &fakeLogs{}, nil).WithOperateClient(inactive).Restart(ctx, apiRef); !errors.Is(err, provider.ErrNotFound) {
+		t.Fatalf("inactive service: %v", err)
 	}
 }

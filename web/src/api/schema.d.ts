@@ -129,7 +129,7 @@ export interface paths {
         put?: never;
         /**
          * Restart every instance of a service
-         * @description Answers with the service read fresh afterwards, or from the cache when that read fails.
+         * @description ECS starts a new deployment of the current task definition; Docker restarts the service's containers one after another, leaving out one-off containers. Answers with the service read fresh afterwards, or from the cache when that read fails.
          */
         post: operations["restartService"];
         delete?: never;
@@ -153,7 +153,7 @@ export interface paths {
         put?: never;
         /**
          * Set the desired instance count of a service
-         * @description Answers with the service read fresh afterwards, or from the cache when that read fails.
+         * @description ECS only, on a target with an operate role: a Docker service's replica count lives in its compose file. Answers with the service read fresh afterwards, or from the cache when that read fails.
          */
         post: operations["scaleService"];
         delete?: never;

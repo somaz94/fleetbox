@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"sort"
 	"strings"
@@ -55,6 +56,11 @@ type API interface {
 	DescribeTaskDefinition(context.Context, *ecs.DescribeTaskDefinitionInput, ...func(*ecs.Options)) (*ecs.DescribeTaskDefinitionOutput, error)
 }
 
+// OperateAPI is the call made with the target's operate role.
+type OperateAPI interface {
+	UpdateService(context.Context, *ecs.UpdateServiceInput, ...func(*ecs.Options)) (*ecs.UpdateServiceOutput, error)
+}
+
 // LogsAPI is the subset of the CloudWatch Logs client this adapter calls.
 type LogsAPI interface {
 	GetLogEvents(context.Context, *cloudwatchlogs.GetLogEventsInput, ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.GetLogEventsOutput, error)
@@ -65,13 +71,15 @@ type Provider struct {
 	target         string
 	cfg            Config
 	api            API
+	operate        OperateAPI // nil without operateRoleArn
 	logs           func(region string) LogsAPI
 	followInterval time.Duration
 	taskDefs       sync.Map // task definition ARN -> *types.TaskDefinition; immutable once registered
 }
 
 // New builds the adapter from the target's `ecs:` block. Credentials come from
-// the SDK default chain; ReadRoleArn, when set, is assumed on top of it.
+// the SDK default chain; ReadRoleArn and OperateRoleArn are each assumed from
+// that identity, never from one another.
 func New(t config.Target) (provider.Provider, error) {
 	var c Config
 	if err := config.DecodeStrict(&t.Spec, &c); err != nil {
@@ -84,9 +92,13 @@ func New(t config.Target) (provider.Provider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ecs: load AWS config: %w", err)
 	}
-	if c.ReadRoleArn != "" {
-		base.Credentials = aws.NewCredentialsCache(stscreds.NewAssumeRoleProvider(sts.NewFromConfig(base), c.ReadRoleArn,
+	identity := base.Copy()
+	assume := func(arn string) aws.CredentialsProvider {
+		return aws.NewCredentialsCache(stscreds.NewAssumeRoleProvider(sts.NewFromConfig(identity), arn,
 			func(o *stscreds.AssumeRoleOptions) { o.RoleSessionName = sessionName }))
+	}
+	if c.ReadRoleArn != "" {
+		base.Credentials = assume(c.ReadRoleArn)
 	}
 	var mu sync.Mutex
 	clients := map[string]LogsAPI{}
@@ -102,7 +114,13 @@ func New(t config.Target) (provider.Provider, error) {
 		clients[region] = cl
 		return cl
 	}
-	return NewWithClients(t.Name, c, ecs.NewFromConfig(base), logs), nil
+	p := NewWithClients(t.Name, c, ecs.NewFromConfig(base), logs)
+	if c.OperateRoleArn != "" {
+		oc := identity
+		oc.Credentials = assume(c.OperateRoleArn)
+		p.WithOperateClient(ecs.NewFromConfig(oc))
+	}
+	return p, nil
 }
 
 // NewWithClients builds the adapter around given clients; tests pass fakes.
@@ -110,10 +128,43 @@ func NewWithClients(target string, c Config, api API, logs func(region string) L
 	return &Provider{target: target, cfg: c, api: api, logs: logs, followInterval: defaultFollowInterval}
 }
 
+// WithOperateClient enables restart and scale through op, a client holding
+// the operate role.
+func (p *Provider) WithOperateClient(op OperateAPI) *Provider {
+	p.operate = op
+	return p
+}
+
 func (p *Provider) Kind() string { return Kind }
 
 func (p *Provider) Capabilities() provider.Capabilities {
-	return provider.Capabilities{Logs: true, FollowLogs: true, Events: true}
+	ops := p.operate != nil
+	return provider.Capabilities{Logs: true, FollowLogs: true, Events: true, Restart: ops, Scale: ops}
+}
+
+// Restart starts a new deployment of the service with its current task
+// definition, which replaces every task.
+func (p *Provider) Restart(ctx context.Context, ref model.ServiceRef) error {
+	return p.update(ctx, ref, &ecs.UpdateServiceInput{ForceNewDeployment: true})
+}
+
+// Scale sets the service's desired task count.
+func (p *Provider) Scale(ctx context.Context, ref model.ServiceRef, desired int) error {
+	if desired < 0 || desired > math.MaxInt32 {
+		return fmt.Errorf("ecs: desired count %d out of range", desired)
+	}
+	return p.update(ctx, ref, &ecs.UpdateServiceInput{DesiredCount: aws.Int32(int32(desired))})
+}
+
+func (p *Provider) update(ctx context.Context, ref model.ServiceRef, in *ecs.UpdateServiceInput) error {
+	if p.operate == nil {
+		return fmt.Errorf("target %q has no operateRoleArn: %w", p.target, provider.ErrUnsupported)
+	}
+	in.Cluster, in.Service = aws.String(ref.Scope), aws.String(ref.Name)
+	if _, err := p.operate.UpdateService(ctx, in); err != nil {
+		return p.classify(err)
+	}
+	return nil
 }
 
 // Inventory lists every cluster's services, then its running and recently
@@ -472,14 +523,16 @@ func (p *Provider) mapTask(cluster, service string, t types.Task) model.Instance
 }
 
 // classify keeps cancellation as is, maps ECS not-found errors to
-// ErrNotFound and network failures to ErrUnreachable.
+// ErrNotFound and network failures to ErrUnreachable. A service that is not
+// active (draining) cannot be operated and reads as not found too.
 func (p *Provider) classify(err error) error {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
 	var cnf *types.ClusterNotFoundException
 	var snf *types.ServiceNotFoundException
-	if errors.As(err, &cnf) || errors.As(err, &snf) {
+	var sna *types.ServiceNotActiveException
+	if errors.As(err, &cnf) || errors.As(err, &snf) || errors.As(err, &sna) {
 		return fmt.Errorf("%w: %w", provider.ErrNotFound, err)
 	}
 	var ne net.Error

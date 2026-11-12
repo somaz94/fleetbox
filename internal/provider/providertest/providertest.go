@@ -128,6 +128,47 @@ func Run(t *testing.T, newProvider func(t *testing.T) provider.Provider, fx Fixt
 			}
 		}
 	})
+
+	t.Run("operations", func(t *testing.T) {
+		p := newProvider(t)
+		caps := p.Capabilities()
+		op, ok := p.(provider.Operator)
+		if !ok {
+			if caps.Restart || caps.Scale {
+				t.Fatal("restart or scale advertised without implementing provider.Operator")
+			}
+			return
+		}
+		checkOperation(t, fx, "restart", caps.Restart, op.Restart)
+		checkOperation(t, fx, "scale", caps.Scale, func(ctx context.Context, ref model.ServiceRef) error {
+			return op.Scale(ctx, ref, 1)
+		})
+	})
+}
+
+// checkOperation pins the error kinds the API maps to 501, 404 and a cancelled
+// request. A provider may meet them in a read before its mutating call, so the
+// call itself is covered by the provider's own tests.
+func checkOperation(t *testing.T, fx Fixture, name string, capable bool, run func(context.Context, model.ServiceRef) error) {
+	t.Helper()
+	ctx := context.Background()
+	if !capable {
+		if err := run(ctx, fx.Known); !errors.Is(err, provider.ErrUnsupported) {
+			t.Fatalf("%s without the capability: err = %v, want ErrUnsupported", name, err)
+		}
+		return
+	}
+	if err := run(ctx, fx.Known); err != nil {
+		t.Fatalf("%s %s: %v", name, fx.Known, err)
+	}
+	if err := run(ctx, fx.Missing); !errors.Is(err, provider.ErrNotFound) {
+		t.Fatalf("%s %s: err = %v, want ErrNotFound", name, fx.Missing, err)
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := run(cancelled, fx.Known); !errors.Is(err, context.Canceled) {
+		t.Fatalf("%s with a cancelled context: err = %v, want context.Canceled", name, err)
+	}
 }
 
 func checkInventory(t *testing.T, fx Fixture, inv model.Inventory) {

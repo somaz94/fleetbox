@@ -29,7 +29,7 @@ const (
 
 	// An operation outlives a caller who hangs up, since the provider may
 	// already have applied it, but not forever.
-	operationTimeout = 2 * time.Minute
+	operationTimeout = 5 * time.Minute
 	auditTimeout     = 5 * time.Second
 )
 
