@@ -1,0 +1,31 @@
+# Example configuration. Every value here is a placeholder: RFC 5737 addresses,
+# example.com and the documentation AWS account ID.
+server:
+  listen: ":8080"
+  publicURL: https://fleetbox.example.com
+store:
+  path: /var/lib/fleetbox/fleetbox.db
+targets:
+  - name: prod-aws
+    provider: ecs
+    env: prod
+    readonly: true
+    ecs:
+      region: ap-northeast-2
+      readRoleArn: arn:aws:iam::123456789012:role/fleetbox-read
+  - name: dev-aws
+    provider: ecs
+    env: dev
+    interval: 1m
+    ecs:
+      region: ap-northeast-2
+      readRoleArn: arn:aws:iam::210987654321:role/fleetbox-read
+      clusters: [web, batch]
+  - name: build-host-1
+    provider: docker
+    docker:
+      transport: ssh
+      host: 192.0.2.10
+      user: fleetbox
+      keyFile: /etc/fleetbox/ssh/id_ed25519
+      knownHostsFile: /etc/fleetbox/ssh/known_hosts
