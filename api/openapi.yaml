@@ -1,0 +1,351 @@
+openapi: 3.0.3
+info:
+  title: fleetbox API
+  description: >
+    Read and operate containers on ECS and Docker hosts. Reads are served from
+    the server's cache and never wait on a provider, except where an operation
+    says it reads fresh. A field a provider cannot supply is absent, never zero.
+  version: v1
+  license:
+    name: Apache-2.0
+servers:
+  - url: /api/v1
+tags:
+  - name: system
+  - name: targets
+  - name: services
+paths:
+  /info:
+    get:
+      operationId: getInfo
+      tags: [system]
+      summary: Build information
+      responses:
+        "200":
+          description: Build information
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Info" }
+  /targets:
+    get:
+      operationId: listTargets
+      tags: [targets]
+      summary: Every configured target and the state of its last refresh
+      responses:
+        "200":
+          description: Targets sorted by name
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Target" }
+  /services:
+    get:
+      operationId: listServices
+      tags: [services]
+      summary: Services across targets
+      parameters:
+        - { name: target, in: query, schema: { type: string } }
+        - { name: provider, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/ServiceStatus" } }
+        - name: q
+          in: query
+          description: Case-insensitive substring of target/scope/name
+          schema: { type: string }
+      responses:
+        "200":
+          description: Services sorted by ref
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Service" }
+        "400": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /services/{target}/{scope}/{service}:
+    parameters:
+      - $ref: "#/components/parameters/TargetName"
+      - $ref: "#/components/parameters/ScopeName"
+      - $ref: "#/components/parameters/ServiceName"
+    get:
+      operationId: getService
+      tags: [services]
+      summary: One service with its instances and stop history, from the cache
+      responses:
+        "200":
+          description: Service detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServiceDetail" }
+        "404": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "500": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /services/{target}/{scope}/{service}/refresh:
+    parameters:
+      - $ref: "#/components/parameters/TargetName"
+      - $ref: "#/components/parameters/ScopeName"
+      - $ref: "#/components/parameters/ServiceName"
+    post:
+      operationId: refreshService
+      tags: [services]
+      summary: Read one service fresh from its provider and update the cache
+      responses:
+        "200":
+          description: Service detail as just read
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServiceDetail" }
+        "404": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "500": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "502": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "504": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /services/{target}/{scope}/{service}/events:
+    parameters:
+      - $ref: "#/components/parameters/TargetName"
+      - $ref: "#/components/parameters/ScopeName"
+      - $ref: "#/components/parameters/ServiceName"
+    get:
+      operationId: listServiceEvents
+      tags: [services]
+      summary: The service's event timeline, read fresh from its provider
+      parameters:
+        - name: since
+          in: query
+          description: Lower bound; the provider's own default when absent
+          schema: { type: string, format: date-time }
+      responses:
+        "200":
+          description: Events, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Event" }
+        "400": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "500": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "501": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "502": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "504": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /services/{target}/{scope}/{service}/instances/{instance}/logs:
+    parameters:
+      - $ref: "#/components/parameters/TargetName"
+      - $ref: "#/components/parameters/ScopeName"
+      - $ref: "#/components/parameters/ServiceName"
+      - { name: instance, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: streamInstanceLogs
+      tags: [services]
+      summary: An instance's output as server-sent events
+      description: >
+        Each `line` event carries one LogLine as JSON. A failure after the
+        stream started arrives as an `error` event carrying an Error; the end of
+        a non-follow stream arrives as an `end` event. While following, a
+        comment line is sent every 15 seconds to keep proxies from closing an
+        idle stream.
+      parameters:
+        - name: container
+          in: query
+          description: Container within the instance; the first container with logs when absent
+          schema: { type: string }
+        - name: tail
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 5000 }
+        - name: since
+          in: query
+          schema: { type: string, format: date-time }
+        - name: follow
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Event stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "400": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "501": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "502": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+components:
+  parameters:
+    TargetName: { name: target, in: path, required: true, schema: { type: string } }
+    ScopeName: { name: scope, in: path, required: true, schema: { type: string } }
+    ServiceName: { name: service, in: path, required: true, schema: { type: string } }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum: [bad_request, not_found, unsupported, unreachable, timeout, internal]
+            message: { type: string }
+    Info:
+      type: object
+      required: [version, commit, buildDate]
+      properties:
+        version: { type: string }
+        commit: { type: string }
+        buildDate: { type: string }
+    Capabilities:
+      type: object
+      required: [logs, followLogs, events, restart, scale]
+      properties:
+        logs: { type: boolean }
+        followLogs: { type: boolean }
+        events: { type: boolean }
+        restart: { type: boolean }
+        scale: { type: boolean }
+    Target:
+      type: object
+      required: [name, provider, readonly, capabilities, stale, serviceCount, instanceCount]
+      properties:
+        name: { type: string }
+        provider: { type: string }
+        env: { type: string }
+        readonly: { type: boolean }
+        capabilities: { $ref: "#/components/schemas/Capabilities" }
+        refreshedAt:
+          type: string
+          format: date-time
+          description: Last successful refresh; absent before the first one
+        attemptedAt: { type: string, format: date-time }
+        stale:
+          type: boolean
+          description: The last refresh failed; the data shown is from refreshedAt
+        error: { type: string }
+        serviceCount: { type: integer }
+        instanceCount: { type: integer }
+    ServiceRef:
+      type: object
+      required: [target, scope, name]
+      properties:
+        target: { type: string }
+        scope: { type: string }
+        name: { type: string }
+    ServiceStatus:
+      type: string
+      description: >
+        healthy: everything desired is running and no running instance is
+        unhealthy. degraded: fewer running than desired, or an unhealthy
+        instance. down: nothing running though something is desired (or, without
+        a desired count, nothing running at all). idle: nothing desired.
+      enum: [healthy, degraded, down, idle]
+    Rollout:
+      type: object
+      required: [state]
+      properties:
+        state: { type: string }
+        startedAt: { type: string, format: date-time }
+    InstanceCounts:
+      type: object
+      required: [running, pending, stopped, unhealthy]
+      properties:
+        running: { type: integer }
+        pending: { type: integer }
+        stopped: { type: integer }
+        unhealthy: { type: integer }
+    Service:
+      type: object
+      required: [ref, provider, status, instances, stale]
+      properties:
+        ref: { $ref: "#/components/schemas/ServiceRef" }
+        provider: { type: string }
+        status: { $ref: "#/components/schemas/ServiceStatus" }
+        desired: { type: integer }
+        running: { type: integer }
+        pending: { type: integer }
+        revision: { type: string }
+        rollout: { $ref: "#/components/schemas/Rollout" }
+        labels:
+          type: object
+          additionalProperties: { type: string }
+        instances: { $ref: "#/components/schemas/InstanceCounts" }
+        stale:
+          type: boolean
+          description: The target's last refresh failed
+    Port:
+      type: object
+      required: [container]
+      properties:
+        container: { type: integer }
+        host: { type: integer }
+        protocol: { type: string }
+    Container:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        image: { type: string }
+        digest: { type: string }
+        status: { type: string }
+        health: { $ref: "#/components/schemas/Health" }
+        exitCode: { type: integer }
+        reason: { type: string }
+        ports:
+          type: array
+          items: { $ref: "#/components/schemas/Port" }
+    Health:
+      type: string
+      enum: [healthy, unhealthy, starting]
+    InstanceStatus:
+      type: string
+      enum: [running, pending, stopped, unknown]
+    Instance:
+      type: object
+      required: [id, status, containers]
+      properties:
+        id: { type: string }
+        status: { $ref: "#/components/schemas/InstanceStatus" }
+        health: { $ref: "#/components/schemas/Health" }
+        revision: { type: string }
+        startedAt: { type: string, format: date-time }
+        stoppedAt: { type: string, format: date-time }
+        stopReason: { type: string }
+        restarts: { type: integer }
+        containers:
+          type: array
+          items: { $ref: "#/components/schemas/Container" }
+    StopRecord:
+      type: object
+      required: [instanceId, stoppedAt]
+      properties:
+        instanceId: { type: string }
+        stoppedAt: { type: string, format: date-time }
+        reason: { type: string }
+        exitCode: { type: integer }
+        image: { type: string }
+        digest: { type: string }
+    ServiceDetail:
+      type: object
+      required: [service, instances, stops]
+      properties:
+        service: { $ref: "#/components/schemas/Service" }
+        instances:
+          type: array
+          items: { $ref: "#/components/schemas/Instance" }
+        stops:
+          type: array
+          description: Recorded stops, newest first, kept after the provider forgets them
+          items: { $ref: "#/components/schemas/StopRecord" }
+    Severity:
+      type: string
+      enum: [info, warning]
+    Event:
+      type: object
+      required: [time, severity, message]
+      properties:
+        time: { type: string, format: date-time }
+        instance: { type: string }
+        severity: { $ref: "#/components/schemas/Severity" }
+        message: { type: string }
+    LogLine:
+      type: object
+      required: [text]
+      properties:
+        time: { type: string, format: date-time }
+        stream: { type: string, enum: [stdout, stderr] }
+        text: { type: string }

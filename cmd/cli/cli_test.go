@@ -136,6 +136,15 @@ func TestServe(t *testing.T) {
 			t.Fatalf("%s = %d %q", p, resp.StatusCode, body)
 		}
 	}
+	resp, err := http.Get(base + "/api/v1/targets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"name":"a"`) || !strings.Contains(string(body), `"name":"b"`) {
+		t.Fatalf("targets = %d %s", resp.StatusCode, body)
+	}
 	if _, err := os.Stat(db); err != nil {
 		t.Fatalf("store not created: %v", err)
 	}
@@ -161,6 +170,13 @@ func TestServeErrors(t *testing.T) {
 	path, _ := writeConfig(t, goodTargets)
 	cfg, _ := config.Load(path)
 	if err := serve(context.Background(), cfg, listen(), "loud"); err == nil || !strings.Contains(err.Error(), "log level") {
+		t.Fatalf("err = %v", err)
+	}
+
+	// OIDC is configured but not implemented yet: refuse rather than serve unauthenticated.
+	withOIDC := *cfg
+	withOIDC.Auth.OIDC = &config.OIDC{Issuer: "https://sso.example.com", ClientID: "fleetbox"}
+	if err := serve(context.Background(), &withOIDC, listen(), "info"); err == nil || !strings.Contains(err.Error(), "not implemented yet") {
 		t.Fatalf("err = %v", err)
 	}
 

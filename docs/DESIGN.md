@@ -174,22 +174,29 @@ Access to the Docker API is root on that host, which is why targets default to r
 
 ## API
 
-`api/openapi.yaml` is the source of truth. The Go server interface is generated with `oapi-codegen`, and the console's TypeScript types with `openapi-typescript`. Generated code is never edited by hand.
+`api/openapi.yaml` is the source of truth. The Go server interface is generated with `oapi-codegen`, and the console's TypeScript types with `openapi-typescript`. Generated code is never edited by hand, and CI fails when it no longer matches the spec.
 
-| Method and path | Purpose |
-|---|---|
-| `GET /api/v1/me` | user, groups, effective role per target |
-| `GET /api/v1/targets` | targets with health, staleness and last error |
-| `GET /api/v1/services` | filtered list across targets (`target`, `provider`, `status`, `q`) |
-| `GET /api/v1/services/{target}/{scope}/{service}` | detail, including rollout and revision |
-| `GET …/{service}/instances` | instances, including recently stopped ones from the store |
-| `GET …/{service}/events` | merged event timeline |
-| `GET /api/v1/instances/{target}/{instance}/logs` | SSE; `follow`, `since`, `tail` |
-| `POST …/{service}:restart` | operation, audited |
-| `POST …/{service}:scale` | operation, audited |
-| `POST …/{service}:refresh` | on-demand refresh of one service |
-| `GET /api/v1/findings` | drift, stuck and stop-reason findings |
-| `GET /api/v1/audit` | audit log |
+`…` stands for `/api/v1/services/{target}/{scope}/{service}`.
+
+| Method and path | Purpose | Release |
+|---|---|---|
+| `GET /api/v1/info` | build version | v0.1 |
+| `GET /api/v1/targets` | targets with capabilities, staleness, last error and counts | v0.1 |
+| `GET /api/v1/services` | filtered list across targets (`target`, `provider`, `status`, `q`) with a derived status and instance counts | v0.1 |
+| `GET …` | detail from the cache: instances, rollout, revision, recorded stop history | v0.1 |
+| `POST …/refresh` | read one service fresh and update the cache | v0.1 |
+| `GET …/events` | the provider's event timeline, newest first | v0.1 |
+| `GET …/instances/{instance}/logs` | SSE: `line`, `error` and `end` events; `container`, `tail`, `since`, `follow` | v0.1 |
+| `GET /api/v1/me` | user, groups, effective role per target | v0.2 |
+| `POST …/restart`, `POST …/scale` | operations, audited | v0.3 |
+| `GET /api/v1/audit` | audit log | v0.3 |
+| `GET /api/v1/findings` | drift, stuck, stop-reason and hygiene findings | v0.4 |
+
+- A service's status is derived in core, the same for every transport: `idle` when nothing is desired, `down` when nothing runs, `degraded` when fewer run than desired or a running instance is unhealthy, otherwise `healthy`. A provider without a desired count (Docker) is judged on its instances alone.
+- Every error, including an unknown route or a malformed parameter, answers with the `Error` schema and a code (`bad_request`, `not_found`, `unsupported`, `unreachable`, `timeout`, `internal`). An internal error's text is logged, not returned.
+- Tests validate every JSON response against the spec, status code included, so the Go output and the generated TypeScript types cannot drift apart.
+- The logs endpoint is written by hand rather than generated, because the generated strict server copies a body without flushing. Once the stream has started, a failure can only arrive as an `error` event.
+- Until authentication lands (v0.2), the server refuses to bind beyond loopback, and refuses `auth.oidc` rather than accept it and serve unauthenticated.
 
 <br/>
 

@@ -1,0 +1,19 @@
+# Generates the server interface and models from openapi.yaml: `make generate`.
+package: api
+output: internal/api/api.gen.go
+generate:
+  models: true
+  std-http-server: true
+  strict-server: true
+  embedded-spec: true
+output-options:
+  # Served by a hand-written handler: the strict server copies a body without
+  # flushing, which would hold server-sent events back.
+  exclude-operation-ids:
+    - streamInstanceLogs
+  # Keep schemas only the hand-written logs handler references (LogLine).
+  skip-prune: true
+compatibility:
+  # Stable constant names: without this a value gains a prefix only once
+  # another enum shares it, renaming constants under existing code.
+  always-prefix-enum-values: true

@@ -38,11 +38,20 @@ jobs:
       - name: Lint
         run: make lint
 
+      - name: Generated code is current
+        run: |
+          make generate
+          git diff --exit-code internal/api/api.gen.go
+
       - name: Test
         run: go test ./... -race -coverprofile=coverage.out
 
-      - name: Coverage summary
-        run: go tool cover -func=coverage.out | tail -1
+      - name: Coverage (90% minimum; generated code, main and the conformance suite excluded)
+        run: |
+          grep -vE '\.gen\.go:|/cmd/main\.go:|/providertest/' coverage.out > coverage.hand.out
+          total=$(go tool cover -func=coverage.hand.out | awk '/^total:/ {sub("%", "", $3); print $3}')
+          echo "coverage ${total}%"
+          awk -v t="$total" 'BEGIN { exit (t + 0 < 90) }'
 
   build:
     name: Build

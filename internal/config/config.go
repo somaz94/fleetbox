@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path"
 	"regexp"
@@ -20,7 +21,7 @@ import (
 )
 
 const (
-	DefaultListen   = ":8080"
+	DefaultListen   = "127.0.0.1:8080"
 	DefaultInterval = 30 * time.Second
 	MinInterval     = 5 * time.Second
 	DefaultDBPath   = "/var/lib/fleetbox/fleetbox.db"
@@ -229,5 +230,24 @@ func (c *Config) Validate() error {
 	if o := c.Auth.OIDC; o != nil && (o.Issuer == "" || o.ClientID == "") {
 		errs = append(errs, errors.New("auth.oidc: issuer and clientID are required"))
 	}
+	if loopback, err := IsLoopback(c.Server.Listen); err != nil {
+		errs = append(errs, fmt.Errorf("server.listen: %w", err))
+	} else if !loopback && c.Auth.OIDC == nil {
+		errs = append(errs, fmt.Errorf("server.listen %q is reachable beyond this host: configure auth.oidc or bind to 127.0.0.1", c.Server.Listen))
+	}
 	return errors.Join(errs...)
+}
+
+// IsLoopback reports whether a listen address only accepts local connections.
+// An empty host (":8080") listens on every interface.
+func IsLoopback(listen string) (bool, error) {
+	host, _, err := net.SplitHostPort(listen)
+	if err != nil {
+		return false, err
+	}
+	if host == "localhost" {
+		return true, nil
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback(), nil
 }

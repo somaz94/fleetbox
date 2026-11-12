@@ -1,4 +1,4 @@
-.PHONY: build test cover fmt vet lint check-config clean help
+.PHONY: build test cover generate fmt vet lint check-config clean help
 
 APP_NAME=fleetbox
 MODULE=github.com/somaz94/fleetbox
@@ -15,9 +15,14 @@ build: ## Build the binary into bin/
 test: ## Run unit tests with the race detector and coverage
 	go test -p $(TEST_P) -race -cover ./...
 
-cover: ## Write coverage.out and print per-function coverage
+cover: ## Print the coverage total the 90% rule applies to
 	go test -p $(TEST_P) -coverprofile=coverage.out ./...
-	go tool cover -func=coverage.out
+	@# Excluded: generated code, the main entry point, and the conformance suite (exercised by provider tests).
+	grep -vE '\.gen\.go:|/cmd/main\.go:|/providertest/' coverage.out > coverage.hand.out
+	go tool cover -func=coverage.hand.out | tail -1
+
+generate: ## Regenerate internal/api/api.gen.go from api/openapi.yaml
+	go tool oapi-codegen -config api/oapi-codegen.yaml api/openapi.yaml
 
 fmt: ## Format code
 	gofmt -w .
@@ -33,7 +38,7 @@ check-config: build ## Validate a configuration file (usage: make check-config C
 	./bin/$(APP_NAME) check --config $(CONFIG)
 
 clean: ## Remove build artifacts and coverage files
-	rm -rf bin/ coverage.out
+	rm -rf bin/ coverage.out coverage.hand.out
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-14s\033[0m %s\n", $$1, $$2}'

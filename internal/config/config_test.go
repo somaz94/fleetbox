@@ -84,6 +84,9 @@ func TestParseErrors(t *testing.T) {
 		{name: "role without group or targets", doc: "auth:\n  roles:\n    - {role: viewer}\ntargets:\n  - {name: a, provider: ecs, ecs: {}}", want: "group is required"},
 		{name: "bad pattern", doc: "auth:\n  roles:\n    - {group: g, targets: ['['], role: viewer}\ntargets:\n  - {name: a, provider: ecs, ecs: {}}", want: "bad target pattern"},
 		{name: "oidc incomplete", doc: "auth:\n  oidc: {issuer: https://sso.example.com}\ntargets:\n  - {name: a, provider: ecs, ecs: {}}", want: "issuer and clientID"},
+		{name: "every interface without auth", doc: "server: {listen: ':8080'}\ntargets:\n  - {name: a, provider: ecs, ecs: {}}", want: "reachable beyond this host"},
+		{name: "pod address without auth", doc: "server: {listen: '192.0.2.10:8080'}\ntargets:\n  - {name: a, provider: ecs, ecs: {}}", want: "reachable beyond this host"},
+		{name: "bad listen", doc: "server: {listen: '8080'}\ntargets:\n  - {name: a, provider: ecs, ecs: {}}", want: "server.listen"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -111,6 +114,22 @@ func TestDecodeStrict(t *testing.T) {
 	}
 	if err := DecodeStrict(&yaml.Node{}, &out); err != nil {
 		t.Fatalf("empty node: %v", err)
+	}
+}
+
+func TestIsLoopback(t *testing.T) {
+	for listen, want := range map[string]bool{
+		"127.0.0.1:8080": true, "[::1]:8080": true, "localhost:8080": true,
+		":8080": false, "0.0.0.0:8080": false, "192.0.2.10:8080": false, "fleetbox.example.com:8080": false,
+	} {
+		got, err := IsLoopback(listen)
+		if err != nil || got != want {
+			t.Fatalf("IsLoopback(%q) = %v, %v; want %v", listen, got, err, want)
+		}
+	}
+	doc := "server: {listen: ':8080'}\nauth:\n  oidc: {issuer: https://sso.example.com, clientID: fleetbox}\ntargets:\n  - {name: a, provider: ecs, ecs: {}}"
+	if _, err := Parse([]byte(doc)); err != nil {
+		t.Fatalf("every interface with OIDC: %v", err)
 	}
 }
 
