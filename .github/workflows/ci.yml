@@ -46,9 +46,9 @@ jobs:
       - name: Test
         run: go test ./... -race -coverprofile=coverage.out
 
-      - name: Coverage (90% minimum; generated code, main and the conformance suite excluded)
+      - name: Coverage (90% minimum; generated code, main and the test-support packages excluded)
         run: |
-          grep -vE '\.gen\.go:|/cmd/main\.go:|/providertest/' coverage.out > coverage.hand.out
+          grep -vE '\.gen\.go:|/cmd/main\.go:|/providertest/|/oidctest/' coverage.out > coverage.hand.out
           total=$(go tool cover -func=coverage.hand.out | awk '/^total:/ {sub("%", "", $3); print $3}')
           echo "coverage ${total}%"
           awk -v t="$total" 'BEGIN { exit (t + 0 < 90) }'

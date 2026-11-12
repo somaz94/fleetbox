@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/somaz94/fleetbox/internal/api"
+	"github.com/somaz94/fleetbox/internal/auth"
 	"github.com/somaz94/fleetbox/internal/config"
 	"github.com/somaz94/fleetbox/internal/core"
 	"github.com/somaz94/fleetbox/internal/inventory"
@@ -46,10 +47,6 @@ func newServeCmd() *cobra.Command {
 // ephemeral port.
 func serve(ctx context.Context, cfg *config.Config, ln net.Listener, logLevel string) error {
 	defer ln.Close()
-	// Refuse rather than accept the setting and serve unauthenticated.
-	if cfg.Auth.OIDC != nil {
-		return errors.New("auth.oidc is not implemented yet (planned for v0.2): remove it and bind server.listen to 127.0.0.1")
-	}
 	log, err := newLogger(logLevel)
 	if err != nil {
 		return err
@@ -63,6 +60,10 @@ func serve(ctx context.Context, cfg *config.Config, ln net.Listener, logLevel st
 		return err
 	}
 	defer st.Close()
+	authn, err := auth.New(cfg, st, log)
+	if err != nil {
+		return err
+	}
 
 	cache := inventory.NewCache()
 	poller := inventory.NewPoller(targets, cache, st, log)
@@ -76,10 +77,10 @@ func serve(ctx context.Context, cfg *config.Config, ln net.Listener, logLevel st
 	}()
 
 	c := core.New(targets, cache, poller, st, core.BuildInfo{Version: Version, Commit: GitCommit, Date: BuildDate})
-	srv := &http.Server{Handler: newMux(api.NewHandler(c, log)), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Handler: newMux(api.NewHandler(c, authn, log), authn.Routes()), ReadHeaderTimeout: 10 * time.Second}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
-	log.Info("serving", "addr", ln.Addr().String(), "targets", len(targets), "version", Version)
+	log.Info("serving", "addr", ln.Addr().String(), "targets", len(targets), "auth", authn.Mode(), "version", Version)
 
 	select {
 	case err = <-errc:
@@ -99,12 +100,16 @@ func serve(ctx context.Context, cfg *config.Config, ln net.Listener, logLevel st
 	return nil
 }
 
-// newMux serves the probes and the API. Readiness means configuration loaded
-// and the store opened, which is true once the server is listening; it
-// deliberately does not depend on any target being reachable.
-func newMux(apiHandler http.Handler) *http.ServeMux {
+// newMux serves the probes, the API and, in oidc mode, the login routes.
+// Readiness means configuration loaded and the store opened, which is true
+// once the server is listening; it deliberately does not depend on any target
+// or the identity provider being reachable.
+func newMux(apiHandler, authHandler http.Handler) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("/api/", apiHandler)
+	if authHandler != nil {
+		mux.Handle("/auth/", authHandler)
+	}
 	ok := func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Write([]byte("ok\n"))

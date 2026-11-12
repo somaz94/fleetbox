@@ -25,12 +25,14 @@ import (
 
 // Defines values for ErrorErrorCode.
 const (
-	ErrorErrorCodeBadRequest  ErrorErrorCode = "bad_request"
-	ErrorErrorCodeInternal    ErrorErrorCode = "internal"
-	ErrorErrorCodeNotFound    ErrorErrorCode = "not_found"
-	ErrorErrorCodeTimeout     ErrorErrorCode = "timeout"
-	ErrorErrorCodeUnreachable ErrorErrorCode = "unreachable"
-	ErrorErrorCodeUnsupported ErrorErrorCode = "unsupported"
+	ErrorErrorCodeBadRequest   ErrorErrorCode = "bad_request"
+	ErrorErrorCodeForbidden    ErrorErrorCode = "forbidden"
+	ErrorErrorCodeInternal     ErrorErrorCode = "internal"
+	ErrorErrorCodeNotFound     ErrorErrorCode = "not_found"
+	ErrorErrorCodeTimeout      ErrorErrorCode = "timeout"
+	ErrorErrorCodeUnauthorized ErrorErrorCode = "unauthorized"
+	ErrorErrorCodeUnreachable  ErrorErrorCode = "unreachable"
+	ErrorErrorCodeUnsupported  ErrorErrorCode = "unsupported"
 )
 
 // Valid indicates whether the value is a known member of the ErrorErrorCode enum.
@@ -38,11 +40,15 @@ func (e ErrorErrorCode) Valid() bool {
 	switch e {
 	case ErrorErrorCodeBadRequest:
 		return true
+	case ErrorErrorCodeForbidden:
+		return true
 	case ErrorErrorCodeInternal:
 		return true
 	case ErrorErrorCodeNotFound:
 		return true
 	case ErrorErrorCodeTimeout:
+		return true
+	case ErrorErrorCodeUnauthorized:
 		return true
 	case ErrorErrorCodeUnreachable:
 		return true
@@ -110,6 +116,45 @@ func (e LogLineStream) Valid() bool {
 	case LogLineStreamStderr:
 		return true
 	case LogLineStreamStdout:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MeMode.
+const (
+	MeModeNone  MeMode = "none"
+	MeModeOidc  MeMode = "oidc"
+	MeModeProxy MeMode = "proxy"
+)
+
+// Valid indicates whether the value is a known member of the MeMode enum.
+func (e MeMode) Valid() bool {
+	switch e {
+	case MeModeNone:
+		return true
+	case MeModeOidc:
+		return true
+	case MeModeProxy:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for Role.
+const (
+	RoleOperator Role = "operator"
+	RoleViewer   Role = "viewer"
+)
+
+// Valid indicates whether the value is a known member of the Role enum.
+func (e Role) Valid() bool {
+	switch e {
+	case RoleOperator:
+		return true
+	case RoleViewer:
 		return true
 	default:
 		return false
@@ -242,12 +287,30 @@ type LogLine struct {
 // LogLineStream defines model for LogLine.Stream.
 type LogLineStream string
 
+// Me defines model for Me.
+type Me struct {
+	Groups []string `json:"groups"`
+
+	// Mode How the caller was identified. none: authentication is off, which the server allows only on loopback; the console shows no sign-out.
+	Mode MeMode `json:"mode"`
+
+	// Targets Targets the caller holds a role on, sorted by name; any other target is hidden
+	Targets []TargetRole `json:"targets"`
+	User    string       `json:"user"`
+}
+
+// MeMode How the caller was identified. none: authentication is off, which the server allows only on loopback; the console shows no sign-out.
+type MeMode string
+
 // Port defines model for Port.
 type Port struct {
 	Container int     `json:"container"`
 	Host      *int    `json:"host,omitempty"`
 	Protocol  *string `json:"protocol,omitempty"`
 }
+
+// Role viewer reads; operator also runs operations, unless the target is read-only
+type Role string
 
 // Rollout defines model for Rollout.
 type Rollout struct {
@@ -325,6 +388,14 @@ type Target struct {
 	Stale bool `json:"stale"`
 }
 
+// TargetRole defines model for TargetRole.
+type TargetRole struct {
+	Name string `json:"name"`
+
+	// Role viewer reads; operator also runs operations, unless the target is read-only
+	Role Role `json:"role"`
+}
+
 // ScopeName defines model for ScopeName.
 type ScopeName = string
 
@@ -355,6 +426,9 @@ type ServerInterface interface {
 	// GetInfo Build information
 	// (GET /info)
 	GetInfo(w http.ResponseWriter, r *http.Request)
+	// GetMe The caller and the role it holds on each target
+	// (GET /me)
+	GetMe(w http.ResponseWriter, r *http.Request)
 	// ListServices Services across targets
 	// (GET /services)
 	ListServices(w http.ResponseWriter, r *http.Request, params ListServicesParams)
@@ -386,6 +460,20 @@ func (siw *ServerInterfaceWrapper) GetInfo(w http.ResponseWriter, r *http.Reques
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetInfo(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetMe operation middleware
+func (siw *ServerInterfaceWrapper) GetMe(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetMe(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -750,6 +838,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	}
 
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/info", wrapper.GetInfo)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/me", wrapper.GetMe)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/targets", wrapper.ListTargets)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/services", wrapper.ListServices)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/services/{target}/{scope}/{service}", wrapper.GetService)
@@ -776,6 +865,83 @@ func (response GetInfo200JSONResponse) VisitGetInfoResponse(w http.ResponseWrite
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetInfo401JSONResponse Error
+
+func (response GetInfo401JSONResponse) VisitGetInfoResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetInfo500JSONResponse Error
+
+func (response GetInfo500JSONResponse) VisitGetInfoResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetMeRequestObject struct {
+}
+
+type GetMeResponseObject interface {
+	VisitGetMeResponse(w http.ResponseWriter) error
+}
+
+type GetMe200JSONResponse Me
+
+func (response GetMe200JSONResponse) VisitGetMeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetMe401JSONResponse Error
+
+func (response GetMe401JSONResponse) VisitGetMeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetMe500JSONResponse Error
+
+func (response GetMe500JSONResponse) VisitGetMeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -816,6 +982,34 @@ func (response ListServices400JSONResponse) VisitListServicesResponse(w http.Res
 	return err
 }
 
+type ListServices401JSONResponse Error
+
+func (response ListServices401JSONResponse) VisitListServicesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListServices500JSONResponse Error
+
+func (response ListServices500JSONResponse) VisitListServicesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetServiceRequestObject struct {
 	Target  TargetName  `json:"target"`
 	Scope   ScopeName   `json:"scope"`
@@ -836,6 +1030,20 @@ func (response GetService200JSONResponse) VisitGetServiceResponse(w http.Respons
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetService401JSONResponse Error
+
+func (response GetService401JSONResponse) VisitGetServiceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -903,6 +1111,20 @@ func (response ListServiceEvents400JSONResponse) VisitListServiceEventsResponse(
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListServiceEvents401JSONResponse Error
+
+func (response ListServiceEvents401JSONResponse) VisitListServiceEventsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -1001,6 +1223,34 @@ func (response RefreshService200JSONResponse) VisitRefreshServiceResponse(w http
 	return err
 }
 
+type RefreshService401JSONResponse Error
+
+func (response RefreshService401JSONResponse) VisitRefreshServiceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RefreshService403JSONResponse Error
+
+func (response RefreshService403JSONResponse) VisitRefreshServiceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type RefreshService404JSONResponse Error
 
 func (response RefreshService404JSONResponse) VisitRefreshServiceResponse(w http.ResponseWriter) error {
@@ -1078,11 +1328,42 @@ func (response ListTargets200JSONResponse) VisitListTargetsResponse(w http.Respo
 	return err
 }
 
+type ListTargets401JSONResponse Error
+
+func (response ListTargets401JSONResponse) VisitListTargetsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTargets500JSONResponse Error
+
+func (response ListTargets500JSONResponse) VisitListTargetsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 	// GetInfo Build information
 	// (GET /info)
 	GetInfo(ctx context.Context, request GetInfoRequestObject) (GetInfoResponseObject, error)
+	// GetMe The caller and the role it holds on each target
+	// (GET /me)
+	GetMe(ctx context.Context, request GetMeRequestObject) (GetMeResponseObject, error)
 	// ListServices Services across targets
 	// (GET /services)
 	ListServices(ctx context.Context, request ListServicesRequestObject) (ListServicesResponseObject, error)
@@ -1156,6 +1437,30 @@ func (sh *strictHandler) GetInfo(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetInfoResponseObject); ok {
 		if err := validResponse.VisitGetInfoResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetMe operation middleware
+func (sh *strictHandler) GetMe(w http.ResponseWriter, r *http.Request) {
+	var request GetMeRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetMe(ctx, request.(GetMeRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetMe")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetMeResponseObject); ok {
+		if err := validResponse.VisitGetMeResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -1303,41 +1608,50 @@ func (sh *strictHandler) ListTargets(w http.ResponseWriter, r *http.Request) {
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"5Fpfj9u4Ef8qBFsgLcBb53Lpi/OUboLeAos2WO/bdXGgpZHNRCIVkrLjLvzdi+EfSZYpWdu77AXp067E",
-	"ITnzm/8jP9JMVbWSIK2hy0dac80rsKDd0ypTNfyTV4APQtIlrbndUkale0cNrlNGNXxuhIacLq1ugFGT",
-	"baHiuMkeakdotZAbejwyugK9E9nkqZ7iiefec70BO3GsdQRPOvUYFx0a17zma1EKK8BjpVUNOj7BLmIY",
-	"TlkrVQKX9MhoocpS7W/VZmS9HF3RYCzXNr1oMl5CaunYF/IXf/wJFyyy290Qj3tg8Ti1/giZxYuulbRc",
-	"SNDnYudiA8YmwGMUvgh7rfI+h0Ja2IDG1S3w0m5x7c8aCrqkf1p0prgIsC9+9lRHRkXFN5C8R/IqvVAr",
-	"7TUiLFTm0lUflHbChmO41vzgVcCNkskLjOW2MWl77CvAcZgC9r3WKgEqpF9nAUyQTYXHrnn+K14DBtUn",
-	"lf21UI3MKaONNE2N4oN/0sCzLV+XQBm1ogLV4A7Uhpa87LHWyVaBMWnEB8I5rjr6czEH9F64JBpok+di",
-	"C2ksl1lax+NsMmpgB1rYwyXNryLd0aOD9IXSFbd0SXNu4Qf3ll0AIhC1t05hwujPrf1HdXqPODiFdf87",
-	"78TrUkq6kYU6B2zdiDJ/x20alUxVlUh77A60EUlbH4gaCdvTWO/SlLQ3PR0OjTrElvme2oWjhLs+Oa7k",
-	"SShCWDTp4KVhJ0aQChqD/K2da0f9QDLFdARx5andPlXfTcUnVddP4WSgZpHTljfW19SUiq9VE4uJE0XX",
-	"IHO8JA1oI+XoYhAjvdj5SmJ5IE+8hbXMdIf3T5oSb9WqKvrtpVM/SbWXSfe9VZtbIRNOYawGXvUvMTb3",
-	"QdvYHLROHmfhS9qvf0tQwzNTeLh0Oe7NI0lfGZteqbWyKlPlnHwTr0ixdYdFTmNTkP5PXjkjAXqyFDOh",
-	"1k1UTWD87hQUMd/NjgfB47CQ5Gso3T6e58IKJXn54eTmc9sYMj3pp7VWO5GDTh7lWL2Uah0id1BcDKO6",
-	"0+TUiVHhl4NIKJZzMJkWtXX30vstEN8ZvDCk5MYSDYUGsyUFF6Xz4EThPStcB1ljtB7GIihoD89enO30",
-	"H7mesK13YLkox4um+Vm1TdGJpGo6Q54hcYzZ5hzuO8iUziEnbp0RCXswlhRCG8vIJ6gt4YUFTewWSASH",
-	"FAoVZPBlRdk8cVYuNeJt5wINHbhtOE+hRwkmoL+D4hz30WbE98qpldCYXowzbQMb2+7RtuLU8s6UENLc",
-	"ksAO9MFuhdyQEJGIMCS4EeEyJ1K1jxEbJGlT5RXJYaN5DvmSFLAH3ZLbLZfxVEaUJlx229rDrkiu9nJJ",
-	"pPJsdLtVs9kSoyrwC8K0LP5FaUb2Akks4e3rDKMgOzuJW8LL8q9XROQldBeFXVf/lpQlKvAoFf6L2Rvr",
-	"xBNH7NS36nUZ8SCBdTmje67lWOnes8/fr6keb5Ij4Ddj5e7XKyK7m/uHpez2vvWEUzy4tVDVT8ze2WBc",
-	"M9lR9GkRZblLox8b81F8XS5OK2d8TjGdVHmuZHkYmw+5ZBWROfXzW0xnpskyMKZoypjZ3hC+NiAtWUOh",
-	"NLhQ6wIwURLcnGhWceRjzIS8Exk3kWjfOD5ybjkxW7WX6PGFVhXpi8gujbocxidptcVvYBGRv4EkQ00m",
-	"xhlO24U6l+wOeO6iJtout0C6jokoSd5fr9zqO5V9Ak2wFjZXBDcZwjUQ5ANyL7Tdhmf9wpCMZ1twWyXG",
-	"GrLnAnVFeJshGYEvGSbP/RY0kgYWhJLE8IMhAuHGixyWV+QtKQSUee8IknEpFdpLXZcHRN9bCQuX/ge0",
-	"8tGyFBlIA122o29r5PCHV1cvfbdhUe+0KAHsWn0hbz/c0N5wge5+RDJVg+S1oEv609XLq59Qa9xunasu",
-	"Ir4hGrTCYPSi/wB74+OrBlMrabx/v3r5MnYgYYzE67oUmdu4+BjCWzfsna6FCuU1farhv+OQgwjpXQTf",
-	"IY1pqorrQ3Id0/vGuCrjYCxU9AF3LILNmVEhb4Wxq0jETubyv4Tx9ucG9CEx356Ykqd39ovQp+5tq9Z5",
-	"wJ7VxEMfuuYGfhDSgDTCih0Q06w9D0QVoVJfuAJoEXw9xdXnSVEefqPlzKs/u1p4UHyeWVXUMzFuYkvW",
-	"Bwx6uPP172jTftacuD4u9A25ZYlnWhkTgDd9cw4UA4NePHrS4+LRaQn/+qXjlEOvet98vpJPnzZM42og",
-	"eaBA+F8/G/yM/u2PUva/pE82KDzW1URY01boxiUerNvIVhir9IF1KcplprRRnMWsFLsdyaL3/e7ILlJ3",
-	"XybnEPc+OR4fZlrrovugdylAv4/f0gYSD6oxhe3RGr/QvDlpb18YgvVODgVvSpfCZci9I9HNCOlcpTOF",
-	"WWX5s4Q9h8WcoOdBO50APHfI+549HG/78Vlve/Wst73+Y2Ll/baNlS8McTGCoL+VQgJzNTYJXQ3GSAyk",
-	"verqewyTbZ5YPMZ/j4v4g4ZvUzaW/H1I5P5JvxCZDVPoYr9dUB4YrZVJJLo7z/m3V6ERbsjHxvjO9vsP",
-	"5v8X4dWNUFSvHh0Jpq4obWosdy4VouihsX2ZKubu2xbn61dJ/q45ZVLgqtcaunB1itp7nOPjtKkQmwZn",
-	"4V5eBxKi475QYv+MEPZnbz3EIkQPjgk/e/IBqtElXdIFr8UCJzcP7Z52/hNGG0fWvomn9V61Kjk+HP87",
-	"AA==",
+	"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",
+	"1v8dAA==",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

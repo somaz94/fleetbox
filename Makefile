@@ -17,8 +17,8 @@ test: ## Run unit tests with the race detector and coverage
 
 cover: ## Print the coverage total the 90% rule applies to
 	go test -p $(TEST_P) -coverprofile=coverage.out ./...
-	@# Excluded: generated code, the main entry point, and the conformance suite (exercised by provider tests).
-	grep -vE '\.gen\.go:|/cmd/main\.go:|/providertest/' coverage.out > coverage.hand.out
+	@# Excluded: generated code, the main entry point, and the test-support packages (providertest, oidctest).
+	grep -vE '\.gen\.go:|/cmd/main\.go:|/providertest/|/oidctest/' coverage.out > coverage.hand.out
 	go tool cover -func=coverage.hand.out | tail -1
 
 generate: ## Regenerate internal/api/api.gen.go from api/openapi.yaml

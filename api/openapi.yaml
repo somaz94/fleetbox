@@ -5,11 +5,21 @@ info:
     Read and operate containers on ECS and Docker hosts. Reads are served from
     the server's cache and never wait on a provider, except where an operation
     says it reads fresh. A field a provider cannot supply is absent, never zero.
+
+
+    When authentication is on, every operation needs a signed-in caller (the
+    session cookie set by /auth/login, or the identity headers of a trusted
+    proxy) and answers 401 without one. A caller sees only the targets a role
+    is granted on; any other target answers as if it did not exist. A POST
+    must carry the X-Fleetbox-CSRF header and an Origin equal to the
+    server's, or it answers 403.
   version: v1
   license:
     name: Apache-2.0
 servers:
   - url: /api/v1
+security:
+  - session: []
 tags:
   - name: system
   - name: targets
@@ -26,6 +36,21 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Info" }
+        "401": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "500": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /me:
+    get:
+      operationId: getMe
+      tags: [system]
+      summary: The caller and the role it holds on each target
+      responses:
+        "200":
+          description: The caller
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Me" }
+        "401": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "500": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /targets:
     get:
       operationId: listTargets
@@ -39,6 +64,8 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/Target" }
+        "401": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "500": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /services:
     get:
       operationId: listServices
@@ -61,6 +88,8 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/Service" }
         "400": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "500": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /services/{target}/{scope}/{service}:
     parameters:
       - $ref: "#/components/parameters/TargetName"
@@ -76,6 +105,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ServiceDetail" }
+        "401": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "404": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "500": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /services/{target}/{scope}/{service}/refresh:
@@ -93,6 +123,8 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ServiceDetail" }
+        "401": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "404": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "500": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "502": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
@@ -120,6 +152,7 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/Event" }
         "400": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "404": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "500": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "501": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
@@ -162,10 +195,17 @@ paths:
             text/event-stream:
               schema: { type: string }
         "400": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "404": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "500": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "501": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "502": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: fleetbox_session
   parameters:
     TargetName: { name: target, in: path, required: true, schema: { type: string } }
     ScopeName: { name: scope, in: path, required: true, schema: { type: string } }
@@ -181,7 +221,7 @@ components:
           properties:
             code:
               type: string
-              enum: [bad_request, not_found, unsupported, unreachable, timeout, internal]
+              enum: [bad_request, unauthorized, forbidden, not_found, unsupported, unreachable, timeout, internal]
             message: { type: string }
     Info:
       type: object
@@ -190,6 +230,34 @@ components:
         version: { type: string }
         commit: { type: string }
         buildDate: { type: string }
+    Me:
+      type: object
+      required: [user, groups, mode, targets]
+      properties:
+        user: { type: string }
+        groups:
+          type: array
+          items: { type: string }
+        mode:
+          type: string
+          description: >
+            How the caller was identified. none: authentication is off, which
+            the server allows only on loopback; the console shows no sign-out.
+          enum: [none, oidc, proxy]
+        targets:
+          type: array
+          description: Targets the caller holds a role on, sorted by name; any other target is hidden
+          items: { $ref: "#/components/schemas/TargetRole" }
+    TargetRole:
+      type: object
+      required: [name, role]
+      properties:
+        name: { type: string }
+        role: { $ref: "#/components/schemas/Role" }
+    Role:
+      type: string
+      description: viewer reads; operator also runs operations, unless the target is read-only
+      enum: [viewer, operator]
     Capabilities:
       type: object
       required: [logs, followLogs, events, restart, scale]

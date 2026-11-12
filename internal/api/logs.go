@@ -42,7 +42,11 @@ func (s *Server) streamLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	stream, err := s.core.Logs(ctx, ref, opts)
+	var stream provider.LogStream
+	err = s.hide(ctx, ref.Service.Target)
+	if err == nil {
+		stream, err = s.core.Logs(ctx, ref, opts)
+	}
 	if err != nil {
 		e, status := s.classify(err)
 		writeError(w, status, e.Error.Code, e.Error.Message)

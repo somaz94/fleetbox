@@ -193,10 +193,10 @@ Access to the Docker API is root on that host, which is why targets default to r
 | `GET /api/v1/findings` | drift, stuck, stop-reason and hygiene findings | v0.4 |
 
 - A service's status is derived in core, the same for every transport: `idle` when nothing is desired, `down` when nothing runs, `degraded` when fewer run than desired or a running instance is unhealthy, otherwise `healthy`. A provider without a desired count (Docker) is judged on its instances alone.
-- Every error, including an unknown route or a malformed parameter, answers with the `Error` schema and a code (`bad_request`, `not_found`, `unsupported`, `unreachable`, `timeout`, `internal`). An internal error's text is logged, not returned.
+- Every error, including an unknown route or a malformed parameter, answers with the `Error` schema and a code (`bad_request`, `unauthorized`, `forbidden`, `not_found`, `unsupported`, `unreachable`, `timeout`, `internal`). An internal error's text is logged, not returned.
 - Tests validate every JSON response against the spec, status code included, so the Go output and the generated TypeScript types cannot drift apart.
 - The logs endpoint is written by hand rather than generated, because the generated strict server copies a body without flushing. Once the stream has started, a failure can only arrive as an `error` event.
-- Until authentication lands (v0.2), the server refuses to bind beyond loopback, and refuses `auth.oidc` rather than accept it and serve unauthenticated.
+- Every `/api/*` request needs a caller: without one it answers 401, and the console sends the browser to `/auth/login`. A target the caller holds no role on is left out of every list and answers 404 exactly like an unknown target, so names cannot be probed.
 
 <br/>
 
@@ -212,13 +212,17 @@ Access to the Docker API is root on that host, which is why targets default to r
 
 ## Authentication and Authorisation
 
-- **Built-in OIDC, backend-for-frontend**: the server runs the authorisation-code flow with PKCE and issues an httpOnly, `SameSite=Lax` session cookie. No token reaches the browser. Any OIDC issuer works; Keycloak is the reference.
-- **Trusted-proxy mode** (optional): accept user and groups from headers set by oauth2-proxy or Pomerium. It is off by default because it is only safe when nothing can reach the pod except the proxy.
-- **Roles**: `viewer` and `operator`, granted by mapping OIDC groups to target name globs. The most permissive matching rule wins.
+- **Built-in OIDC, backend-for-frontend**: the server runs the authorisation-code flow with PKCE (`/auth/login`, `/auth/callback`) and issues an httpOnly, `SameSite=Lax`, `Secure` session cookie with the `__Host-` prefix, so a sibling subdomain cannot plant one. No token reaches the browser, and none is kept: the ID token is verified (signature, issuer, audience, expiry, nonce), its user and groups are copied into the session, and it is discarded. Any OIDC issuer works; Keycloak is the reference. The redirect URL is `<server.publicURL>/auth/callback`, so `publicURL` is required with OIDC, and it must be https unless its host is loopback (local development, where the cookie drops `Secure` and the prefix).
+- **Sessions** live in the store, so a restart or a new release does not sign anyone out. Only a SHA-256 hash of the cookie value is stored. A session lasts `auth.oidc.sessionTTL` from sign-in and is not refreshed; a change to a user's groups takes effect at their next sign-in. Expired sessions are deleted on each sign-in.
+- **Issuer outages**: discovery runs on the first login, not at start-up, and a failure is retried on the next one. Signed-in users keep working while the issuer is down, since a request only reads the session.
+- **Sign-out**: `POST /auth/logout` deletes the session and answers with where the browser should go next: the issuer's `end_session_endpoint` when it publishes one, so the issuer's session ends too, otherwise the console root.
+- **Login state**: each login's state, PKCE verifier, nonce and post-login path travel in a ten-minute cookie sealed with AES-GCM under a key made at start-up. The cookie binds the callback to the browser that started it, so a link carrying someone else's state is refused, and starting logins costs the server no memory, so nobody can exhaust it without signing in. A restart abandons logins in progress; they are simply started again. The post-login path must be a local path without backslashes.
+- **Trusted-proxy mode** (optional, `auth.proxy`): accept the user and groups from headers set by oauth2-proxy or Pomerium. It is off by default because it is only safe when nothing but the proxy can reach the server, and it keeps the loopback rule below, so the proxy runs as a sidecar in the same pod. `server.publicURL` is required so the CSRF check knows the browser's origin, which a TLS-terminating sidecar hides from the request.
+- **Roles**: `viewer` and `operator`, granted by mapping groups to target name globs. The most permissive matching rule wins, and a target no rule grants is invisible to the user. Reading a service fresh (`POST …/refresh`) is a read, so viewers may do it. The groups are the ID token claim named by `auth.oidc.groupsClaim`, taken as written (Keycloak's group mapper prefixes `/` when "full group path" is on).
 - **Read-only targets**: `readonly: true` blocks every operation on the target whatever the role. A target with no operate role (ECS) or no operate permission (Docker) is read-only in effect.
-- **CSRF**: state-changing requests must be `POST` with a custom header and a matching `Origin`.
+- **CSRF**: every request other than `GET`, `HEAD` and `OPTIONS` must carry the `X-Fleetbox-CSRF` header and an `Origin` equal to `server.publicURL` (or, without one, to the request's own host). A browser adds a custom header cross-origin only after a CORS preflight, which fleetbox never grants.
 - **Audit**: every operation, allowed or refused, is recorded with user, target, service, action, parameters and result.
-- No unauthenticated mode when bound to anything but loopback.
+- No unauthenticated mode when bound to anything but loopback. Without `auth.oidc` or `auth.proxy`, the loopback-only server treats every caller as an operator, and it refuses any request whose `Host` is not a loopback name, so a page that reaches it by DNS rebinding gets nothing.
 
 <br/>
 
@@ -248,7 +252,14 @@ auth:
   oidc:
     issuer: https://sso.example.com/realms/example
     clientID: fleetbox
-    clientSecretFile: /etc/fleetbox/oidc-secret
+    clientSecretFile: /etc/fleetbox/oidc-secret   # omit for a public client
+    scopes: [profile, email]                      # besides openid
+    groupsClaim: groups
+    sessionTTL: 12h
+  # or, instead of oidc, behind an authenticating sidecar:
+  # proxy:
+  #   userHeader: X-Forwarded-User
+  #   groupsHeader: X-Forwarded-Groups
   roles:
     - group: platform
       targets: ["*"]
@@ -306,7 +317,7 @@ Thresholds are configuration, and each finding carries the evidence it was raise
 ## Deployment
 
 - One container image published to Docker Hub as `somaz940/fleetbox`, the same registry as the sibling projects: distroless, non-root, multi-architecture, the React build embedded.
-- A Helm chart in `helm/fleetbox`, published as an OCI artefact on GHCR and as a classic repository on the `gh-pages` branch: Deployment with one replica and the `Recreate` strategy (SQLite on a PVC), Service, optional Ingress, a ServiceAccount whose token is mounted only as the audience-bound AWS web-identity token, and Secrets for OIDC, SSH and static AWS material referenced by name. The chart refuses to render without `config.auth.oidc`, mirroring the server's refusal to serve beyond loopback unauthenticated, and it sets `store.path` itself.
+- A Helm chart in `helm/fleetbox`, published as an OCI artefact on GHCR and as a classic repository on the `gh-pages` branch: Deployment with one replica and the `Recreate` strategy (SQLite on a PVC), Service, optional Ingress, a ServiceAccount whose token is mounted only as the audience-bound AWS web-identity token, and Secrets for OIDC, SSH and static AWS material referenced by name. The chart supports OIDC only: trusted-proxy mode needs the proxy as a sidecar, which a deployment builds by hand. It refuses to render without `config.auth.oidc` and `config.server.publicURL`, mirroring the server's refusal to serve beyond loopback unauthenticated, and it sets `store.path` itself.
 - A release is a `vX.Y.Z` tag: the image, the GitHub release (notes from git-cliff) and the chart publish from it, and the major tag (`v1`) follows automatically. The chart's own `version` is bumped by hand in the release commit; its `appVersion` follows the tag.
 - Health endpoints: `/healthz` for liveness, `/readyz` once configuration loaded and the store opened. Readiness does not depend on any target being reachable.
 - Prometheus metrics: refresh duration and errors per target, cache age, operations by result.
@@ -327,8 +338,8 @@ Thresholds are configuration, and each finding carries the evidence it was raise
 | Release | Scope |
 |---|---|
 | v0.1 | OpenAPI spec, core, registry and `providertest`, ECS and Docker (ssh) read paths, poller, cache, store |
-| v0.2 | Read-only console, OIDC login, Helm chart, image |
-| v0.3 | Role mapping, restart and scale, audit log |
+| v0.2 | Read-only console, OIDC login with role mapping on reads, Helm chart, image |
+| v0.3 | Restart and scale for operators, audit log |
 | v0.4 | Findings (drift, stuck, why, hygiene), Slack notifier |
 | Later | Docker agent transport, CLI as an API client, a third provider, interactive shell |
 

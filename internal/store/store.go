@@ -1,10 +1,12 @@
 // Package store persists what must outlive a provider's own memory: stop
-// reasons (ECS forgets stopped tasks within hours) and the audit log.
+// reasons (ECS forgets stopped tasks within hours), the audit log, and login
+// sessions.
 package store
 
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -35,6 +37,19 @@ type AuditEntry struct {
 	Error   string           `json:"error,omitempty"`
 }
 
+// ErrNotFound is returned for a session that does not exist or has expired.
+var ErrNotFound = errors.New("store: not found")
+
+// Session is one signed-in browser. ID is a hash of the cookie value, so the
+// database never holds a usable credential.
+type Session struct {
+	ID        string
+	User      string
+	Groups    []string
+	CreatedAt time.Time
+	ExpiresAt time.Time
+}
+
 // Store is what the rest of the system needs from persistence. SQLite
 // implements it; a Postgres implementation can replace it for HA.
 type Store interface {
@@ -43,6 +58,10 @@ type Store interface {
 	PruneStops(ctx context.Context, before time.Time) (int, error)
 	AppendAudit(ctx context.Context, e AuditEntry) error
 	Audit(ctx context.Context, limit int) ([]AuditEntry, error)
+	CreateSession(ctx context.Context, s Session) error
+	Session(ctx context.Context, id string, now time.Time) (Session, error)
+	DeleteSession(ctx context.Context, id string) error
+	PruneSessions(ctx context.Context, now time.Time) (int, error)
 	Close() error
 }
 
@@ -73,6 +92,14 @@ var migrations = []string{
 		result  TEXT    NOT NULL,
 		error   TEXT    NOT NULL DEFAULT ''
 	);`,
+	`CREATE TABLE sessions (
+		id         TEXT    PRIMARY KEY,
+		user       TEXT    NOT NULL,
+		groups     TEXT    NOT NULL,
+		created_at INTEGER NOT NULL,
+		expires_at INTEGER NOT NULL
+	);
+	CREATE INDEX sessions_by_expiry ON sessions (expires_at);`,
 }
 
 // SQLite is the single-replica Store.
@@ -227,6 +254,60 @@ func (s *SQLite) Audit(ctx context.Context, limit int) ([]AuditEntry, error) {
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+func (s *SQLite) CreateSession(ctx context.Context, sess Session) error {
+	if sess.ID == "" || sess.User == "" {
+		return errors.New("store: session needs an id and a user")
+	}
+	groups := sess.Groups
+	if groups == nil {
+		groups = []string{}
+	}
+	b, err := json.Marshal(groups)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO sessions (id, user, groups, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`,
+		sess.ID, sess.User, string(b), sess.CreatedAt.UnixMilli(), sess.ExpiresAt.UnixMilli())
+	return err
+}
+
+// Session returns the session with that id if it has not expired by now.
+func (s *SQLite) Session(ctx context.Context, id string, now time.Time) (Session, error) {
+	var (
+		sess             Session
+		groups           string
+		created, expires int64
+	)
+	err := s.db.QueryRowContext(ctx, `SELECT id, user, groups, created_at, expires_at FROM sessions WHERE id = ? AND expires_at > ?`,
+		id, now.UnixMilli()).Scan(&sess.ID, &sess.User, &groups, &created, &expires)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Session{}, ErrNotFound
+	}
+	if err != nil {
+		return Session{}, err
+	}
+	if err := json.Unmarshal([]byte(groups), &sess.Groups); err != nil {
+		return Session{}, fmt.Errorf("store: session groups: %w", err)
+	}
+	sess.CreatedAt, sess.ExpiresAt = time.UnixMilli(created).UTC(), time.UnixMilli(expires).UTC()
+	return sess, nil
+}
+
+func (s *SQLite) DeleteSession(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM sessions WHERE id = ?", id)
+	return err
+}
+
+// PruneSessions deletes sessions expired by now.
+func (s *SQLite) PruneSessions(ctx context.Context, now time.Time) (int, error) {
+	res, err := s.db.ExecContext(ctx, "DELETE FROM sessions WHERE expires_at <= ?", now.UnixMilli())
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }
 
 func (s *SQLite) Close() error { return s.db.Close() }

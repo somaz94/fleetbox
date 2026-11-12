@@ -9,10 +9,13 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs v1.92.2
 	github.com/aws/aws-sdk-go-v2/service/ecs v1.105.1
 	github.com/aws/aws-sdk-go-v2/service/sts v1.52.0
+	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/getkin/kin-openapi v0.142.0
+	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/oapi-codegen/runtime v1.9.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.59.0
+	golang.org/x/oauth2 v0.38.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.62.0
 )

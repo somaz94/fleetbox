@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -100,6 +102,57 @@ func TestAudit(t *testing.T) {
 	}
 }
 
+func TestSessions(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	for _, sess := range []Session{
+		{ID: "live", User: "alice", Groups: []string{"platform", "dev"}, CreatedAt: t0, ExpiresAt: t0.Add(time.Hour)},
+		{ID: "old", User: "bob", CreatedAt: t0.Add(-2 * time.Hour), ExpiresAt: t0.Add(-time.Hour)},
+	} {
+		if err := s.CreateSession(ctx, sess); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.CreateSession(ctx, Session{ID: "x"}); err == nil {
+		t.Fatal("session without a user accepted")
+	}
+	if err := s.CreateSession(ctx, Session{ID: "live", User: "mallory"}); err == nil {
+		t.Fatal("duplicate session id accepted")
+	}
+	got, err := s.Session(ctx, "live", t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.User != "alice" || len(got.Groups) != 2 || got.Groups[1] != "dev" || !got.CreatedAt.Equal(t0) || !got.ExpiresAt.Equal(t0.Add(time.Hour)) {
+		t.Fatalf("session = %+v", got)
+	}
+	if _, err := s.Session(ctx, "live", t0.Add(time.Hour)); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expired session: err = %v", err)
+	}
+	if _, err := s.Session(ctx, "nope", t0); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown session: err = %v", err)
+	}
+	if old, err := s.Session(ctx, "old", t0.Add(-90*time.Minute)); err != nil || old.Groups == nil {
+		t.Fatalf("session without groups = %+v, %v", old, err)
+	}
+	if n, err := s.PruneSessions(ctx, t0); err != nil || n != 1 {
+		t.Fatalf("pruned %d, err %v", n, err)
+	}
+	if err := s.DeleteSession(ctx, "live"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Session(ctx, "live", t0); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted session: err = %v", err)
+	}
+
+	if _, err := s.db.Exec(`INSERT INTO sessions VALUES ('bad', 'eve', 'not json', 0, ?)`, t0.Add(time.Hour).UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Session(ctx, "bad", t0); err == nil || !strings.Contains(err.Error(), "session groups") {
+		t.Fatalf("corrupt groups: err = %v", err)
+	}
+}
+
 func TestReopenKeepsDataAndSchema(t *testing.T) {
 	s, path := open(t)
 	ctx := context.Background()
@@ -132,7 +185,7 @@ func TestOpenErrors(t *testing.T) {
 	t.Cleanup(func() { migrations = orig })
 	migrations = append(append([]string{}, orig...), "CREATE TABLE broken (")
 	fresh := filepath.Join(t.TempDir(), "m.db")
-	if _, err := Open(context.Background(), fresh); err == nil || !strings.Contains(err.Error(), "migration 2") {
+	if _, err := Open(context.Background(), fresh); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("migration %d", len(orig)+1)) {
 		t.Fatalf("err = %v", err)
 	}
 	migrations = orig
@@ -172,5 +225,14 @@ func TestClosedStoreErrors(t *testing.T) {
 	}
 	if _, err := s.Audit(ctx, 1); err == nil {
 		t.Fatal("Audit on a closed store")
+	}
+	if err := s.CreateSession(ctx, Session{ID: "a", User: "u"}); err == nil {
+		t.Fatal("CreateSession on a closed store")
+	}
+	if _, err := s.Session(ctx, "a", t0); err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatalf("Session on a closed store: %v", err)
+	}
+	if _, err := s.PruneSessions(ctx, t0); err == nil {
+		t.Fatal("PruneSessions on a closed store")
 	}
 }

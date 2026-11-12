@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"path"
 	"regexp"
@@ -25,7 +26,14 @@ const (
 	DefaultInterval = 30 * time.Second
 	MinInterval     = 5 * time.Second
 	DefaultDBPath   = "/var/lib/fleetbox/fleetbox.db"
+
+	DefaultSessionTTL  = 12 * time.Hour
+	MinSessionTTL      = 5 * time.Minute
+	DefaultGroupsClaim = "groups"
 )
+
+// DefaultScopes are requested besides openid when auth.oidc.scopes is unset.
+var DefaultScopes = []string{"profile", "email"}
 
 // Roles a group can be granted on a target.
 const (
@@ -53,13 +61,25 @@ type Store struct {
 
 type Auth struct {
 	OIDC  *OIDC      `yaml:"oidc"`
+	Proxy *Proxy     `yaml:"proxy"`
 	Roles []RoleRule `yaml:"roles"`
 }
 
 type OIDC struct {
-	Issuer           string `yaml:"issuer"`
-	ClientID         string `yaml:"clientID"`
-	ClientSecretFile string `yaml:"clientSecretFile"`
+	Issuer   string `yaml:"issuer"`
+	ClientID string `yaml:"clientID"`
+	// ClientSecretFile is optional: a public client relies on PKCE alone.
+	ClientSecretFile string        `yaml:"clientSecretFile"`
+	Scopes           []string      `yaml:"scopes"`
+	GroupsClaim      string        `yaml:"groupsClaim"`
+	SessionTTL       time.Duration `yaml:"sessionTTL"`
+}
+
+// Proxy trusts identity headers set by an authenticating reverse proxy. The
+// listen address must stay on loopback, so only a sidecar can set them.
+type Proxy struct {
+	UserHeader   string `yaml:"userHeader"`
+	GroupsHeader string `yaml:"groupsHeader"`
 }
 
 type RoleRule struct {
@@ -173,6 +193,17 @@ func (c *Config) applyDefaults() {
 	if c.Store.Path == "" {
 		c.Store.Path = DefaultDBPath
 	}
+	if o := c.Auth.OIDC; o != nil {
+		if o.Scopes == nil {
+			o.Scopes = DefaultScopes
+		}
+		if o.GroupsClaim == "" {
+			o.GroupsClaim = DefaultGroupsClaim
+		}
+		if o.SessionTTL == 0 {
+			o.SessionTTL = DefaultSessionTTL
+		}
+	}
 	for i := range c.Targets {
 		if c.Targets[i].Interval == 0 {
 			c.Targets[i].Interval = DefaultInterval
@@ -227,8 +258,31 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
-	if o := c.Auth.OIDC; o != nil && (o.Issuer == "" || o.ClientID == "") {
-		errs = append(errs, errors.New("auth.oidc: issuer and clientID are required"))
+	if o := c.Auth.OIDC; o != nil {
+		if o.Issuer == "" || o.ClientID == "" {
+			errs = append(errs, errors.New("auth.oidc: issuer and clientID are required"))
+		}
+		if o.SessionTTL < MinSessionTTL {
+			errs = append(errs, fmt.Errorf("auth.oidc.sessionTTL must be at least %s", MinSessionTTL))
+		}
+		if err := checkPublicURL(c.Server.PublicURL); err != nil {
+			errs = append(errs, fmt.Errorf("server.publicURL: %w (auth.oidc derives its redirect URL from it)", err))
+		} else if u, _ := url.Parse(c.Server.PublicURL); u.Scheme == "http" {
+			if ok, _ := IsLoopback(net.JoinHostPort(u.Hostname(), "0")); !ok {
+				errs = append(errs, errors.New("server.publicURL must be https with auth.oidc: the session cookie would travel in clear"))
+			}
+		}
+	}
+	if p := c.Auth.Proxy; p != nil {
+		if c.Auth.OIDC != nil {
+			errs = append(errs, errors.New("auth: oidc and proxy are mutually exclusive"))
+		}
+		if p.UserHeader == "" {
+			errs = append(errs, errors.New("auth.proxy.userHeader is required"))
+		}
+		if err := checkPublicURL(c.Server.PublicURL); err != nil {
+			errs = append(errs, fmt.Errorf("server.publicURL: %w (auth.proxy checks the browser's Origin against it)", err))
+		}
 	}
 	if loopback, err := IsLoopback(c.Server.Listen); err != nil {
 		errs = append(errs, fmt.Errorf("server.listen: %w", err))
@@ -236,6 +290,24 @@ func (c *Config) Validate() error {
 		errs = append(errs, fmt.Errorf("server.listen %q is reachable beyond this host: configure auth.oidc or bind to 127.0.0.1", c.Server.Listen))
 	}
 	return errors.Join(errs...)
+}
+
+// checkPublicURL accepts an absolute http(s) URL of the server root.
+func checkPublicURL(s string) error {
+	if s == "" {
+		return errors.New("required")
+	}
+	u, err := url.Parse(s)
+	if err != nil {
+		return err
+	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("%q must be an absolute http or https URL", s)
+	}
+	if (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("%q must be the server root, without a path", s)
+	}
+	return nil
 }
 
 // IsLoopback reports whether a listen address only accepts local connections.

@@ -7,10 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
 
+	"github.com/somaz94/fleetbox/internal/auth"
 	"github.com/somaz94/fleetbox/internal/core"
 	"github.com/somaz94/fleetbox/internal/inventory"
 	"github.com/somaz94/fleetbox/internal/model"
@@ -22,15 +24,17 @@ const basePath = "/api/v1"
 // Server implements StrictServerInterface.
 type Server struct {
 	core *core.Core
+	auth *auth.Service
 	log  *slog.Logger
 }
 
 var _ StrictServerInterface = (*Server)(nil)
 
 // NewHandler returns the /api/v1 handler. Errors of every kind, including
-// unknown routes and malformed parameters, answer with the Error schema.
-func NewHandler(c *core.Core, log *slog.Logger) http.Handler {
-	s := &Server{core: c, log: log}
+// unknown routes, malformed parameters and a missing identity, answer with the
+// Error schema.
+func NewHandler(c *core.Core, a *auth.Service, log *slog.Logger) http.Handler {
+	s := &Server{core: c, auth: a, log: log}
 	mux := http.NewServeMux()
 	badRequest := func(w http.ResponseWriter, _ *http.Request, err error) {
 		writeError(w, http.StatusBadRequest, ErrorErrorCodeBadRequest, err.Error())
@@ -47,7 +51,48 @@ func NewHandler(c *core.Core, log *slog.Logger) http.Handler {
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, ErrorErrorCodeNotFound, "no such endpoint")
 	})
-	return mux
+	return s.guard(mux)
+}
+
+// guard identifies the caller of every request and refuses a state-changing
+// one that fails the CSRF check.
+func (s *Server) guard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, err := s.auth.Authenticate(r)
+		if errors.Is(err, auth.ErrUnauthenticated) {
+			writeError(w, http.StatusUnauthorized, ErrorErrorCodeUnauthorized, err.Error())
+			return
+		}
+		if err != nil {
+			s.log.Error("authenticate", "err", err)
+			writeError(w, http.StatusInternalServerError, ErrorErrorCodeInternal, "internal error")
+			return
+		}
+		switch r.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+		default:
+			if err := s.auth.CheckCSRF(r); err != nil {
+				writeError(w, http.StatusForbidden, ErrorErrorCodeForbidden, err.Error())
+				return
+			}
+		}
+		next.ServeHTTP(w, r.WithContext(auth.WithPrincipal(r.Context(), p)))
+	})
+}
+
+// visible reports whether the caller holds any role on target.
+func (s *Server) visible(ctx context.Context, target string) bool {
+	p, _ := auth.FromContext(ctx)
+	return s.auth.Role(p, target) != ""
+}
+
+// hide answers for a target the caller may not see exactly as for one that
+// does not exist, so names cannot be probed.
+func (s *Server) hide(ctx context.Context, target string) error {
+	if s.visible(ctx, target) {
+		return nil
+	}
+	return fmt.Errorf("target %q: %w", target, provider.ErrNotFound)
 }
 
 func (s *Server) GetInfo(context.Context, GetInfoRequestObject) (GetInfoResponseObject, error) {
@@ -55,15 +100,32 @@ func (s *Server) GetInfo(context.Context, GetInfoRequestObject) (GetInfoResponse
 	return GetInfo200JSONResponse{Version: b.Version, Commit: b.Commit, BuildDate: b.Date}, nil
 }
 
-func (s *Server) ListTargets(context.Context, ListTargetsRequestObject) (ListTargetsResponseObject, error) {
-	out := ListTargets200JSONResponse{}
+func (s *Server) GetMe(ctx context.Context, _ GetMeRequestObject) (GetMeResponseObject, error) {
+	p, _ := auth.FromContext(ctx)
+	groups := p.Groups
+	if groups == nil {
+		groups = []string{}
+	}
+	out := GetMe200JSONResponse{User: p.User, Groups: groups, Mode: MeMode(s.auth.Mode()), Targets: []TargetRole{}}
 	for _, t := range s.core.Targets() {
-		out = append(out, toTarget(t))
+		if r := s.auth.Role(p, t.Name); r != "" {
+			out.Targets = append(out.Targets, TargetRole{Name: t.Name, Role: Role(r)})
+		}
 	}
 	return out, nil
 }
 
-func (s *Server) ListServices(_ context.Context, req ListServicesRequestObject) (ListServicesResponseObject, error) {
+func (s *Server) ListTargets(ctx context.Context, _ ListTargetsRequestObject) (ListTargetsResponseObject, error) {
+	out := ListTargets200JSONResponse{}
+	for _, t := range s.core.Targets() {
+		if s.visible(ctx, t.Name) {
+			out = append(out, toTarget(t))
+		}
+	}
+	return out, nil
+}
+
+func (s *Server) ListServices(ctx context.Context, req ListServicesRequestObject) (ListServicesResponseObject, error) {
 	p := req.Params
 	if p.Status != nil && !p.Status.Valid() {
 		return ListServices400JSONResponse(errorBody(ErrorErrorCodeBadRequest, "unknown status "+string(*p.Status))), nil
@@ -74,13 +136,19 @@ func (s *Server) ListServices(_ context.Context, req ListServicesRequestObject) 
 	}
 	out := ListServices200JSONResponse{}
 	for _, v := range s.core.Services(f) {
-		out = append(out, toService(v))
+		if s.visible(ctx, v.Ref.Target) {
+			out = append(out, toService(v))
+		}
 	}
 	return out, nil
 }
 
 func (s *Server) GetService(ctx context.Context, req GetServiceRequestObject) (GetServiceResponseObject, error) {
-	d, err := s.core.Service(ctx, model.ServiceRef{Target: req.Target, Scope: req.Scope, Name: req.Service})
+	var d core.DetailView
+	err := s.hide(ctx, req.Target)
+	if err == nil {
+		d, err = s.core.Service(ctx, model.ServiceRef{Target: req.Target, Scope: req.Scope, Name: req.Service})
+	}
 	if err != nil {
 		e, status := s.classify(err)
 		if status == http.StatusNotFound {
@@ -92,7 +160,11 @@ func (s *Server) GetService(ctx context.Context, req GetServiceRequestObject) (G
 }
 
 func (s *Server) RefreshService(ctx context.Context, req RefreshServiceRequestObject) (RefreshServiceResponseObject, error) {
-	d, err := s.core.Refresh(ctx, model.ServiceRef{Target: req.Target, Scope: req.Scope, Name: req.Service})
+	var d core.DetailView
+	err := s.hide(ctx, req.Target)
+	if err == nil {
+		d, err = s.core.Refresh(ctx, model.ServiceRef{Target: req.Target, Scope: req.Scope, Name: req.Service})
+	}
 	if err != nil {
 		e, status := s.classify(err)
 		switch status {
@@ -114,7 +186,11 @@ func (s *Server) ListServiceEvents(ctx context.Context, req ListServiceEventsReq
 	if req.Params.Since != nil {
 		since = *req.Params.Since
 	}
-	evs, err := s.core.Events(ctx, ref, since)
+	var evs []model.Event
+	err := s.hide(ctx, req.Target)
+	if err == nil {
+		evs, err = s.core.Events(ctx, ref, since)
+	}
 	if err != nil {
 		e, status := s.classify(err)
 		switch status {

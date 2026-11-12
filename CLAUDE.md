@@ -2,7 +2,7 @@
 
 Web console for containers outside Kubernetes: Amazon ECS and Docker hosts first, other platforms as providers. Runs as one service in a Kubernetes cluster and serves a React console plus a versioned JSON API. Go backend.
 
-> **Status**: v0.1 in progress. Providers (ECS, Docker over SSH), the poller, the cache, the store, the read API (`api/openapi.yaml`) and `serve` / `check` exist; authentication, operations and the console do not. `docs/DESIGN.md` is the source of truth for scope and decisions.
+> **Status**: v0.2 in progress. Providers (ECS, Docker over SSH), the poller, the cache, the store, the read API (`api/openapi.yaml`), OIDC sign-in with role mapping, the Helm chart and `serve` / `check` exist; operations and the console do not. `docs/DESIGN.md` is the source of truth for scope and decisions.
 
 <br/>
 
@@ -33,7 +33,8 @@ One role per directory:
 - `internal/inventory`: the in-memory cache and the poller that fills it
 - `internal/core`: the service layer every transport calls (status derivation, filters, cache plus store)
 - `internal/api`: `/api/v1`; `api.gen.go` is generated, `server.go` implements it, `logs.go` is the hand-written SSE endpoint
-- `internal/store`: SQLite persistence for stop history and the audit log
+- `internal/store`: SQLite persistence for stop history, the audit log and login sessions
+- `internal/auth`: the three auth modes (none, oidc, proxy), group-to-target roles and the CSRF check; `oidctest` is an in-process OIDC issuer for tests
 - `helm/fleetbox`: the chart; `ci/default-values.yaml` is what CI renders and checks
 
 <br/>
@@ -59,7 +60,8 @@ The reasoning for each is in `docs/DESIGN.md`. Changing one means changing that 
 - **ECS stop history**: ECS forgets stopped tasks within hours; the poller writes them to the store on every refresh. Do not drop stopped tasks from `Inventory`.
 - **OpenAPI error responses are inlined per operation**, not shared through `components/responses`: with a shared response the generator gives the first status of each operation a different Go shape, which changes whenever a status is added.
 - **A new status code needs the spec first**: the API tests validate every response against the spec, status included, and fail on an undocumented one.
-- **Not binding beyond loopback** is enforced in `config.Validate` until OIDC exists; do not relax it to make a deployment work.
+- **Not binding beyond loopback** without `auth.oidc` is enforced in `config.Validate`, and it applies to proxy mode too, which is what keeps the trusted headers sidecar-only. Do not relax it to make a deployment work.
+- **Authorisation lives in `internal/api`**: every handler, the hand-written logs endpoint included, checks the caller's role on the target and answers 404 for a hidden target. A new endpoint taking a target must do the same.
 - **The chart and the config schema must agree**: CI renders the chart and runs `fleetbox check` on the result. A new config key needs the chart's `config` block (or `_helpers.tpl`) to produce it.
 - **Release automation** (`release.yml`, `helm-release.yml`, `cliff.toml`) follows the sibling repositories and is not changed without the user's approval. `RELEASE.md` is empty in the repository on purpose; git-cliff writes it during a release. Bump `helm/fleetbox/Chart.yaml` `version` in the release commit; `appVersion` follows the tag.
 - **Test data**: instance IDs in fixtures must be unique in their short form (Docker shows 12 characters); the conformance suite rejects duplicates.

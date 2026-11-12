@@ -18,7 +18,10 @@ logLevel: info
 # into a ConfigMap; it holds paths, never secrets. `store` is set by the chart
 # from `persistence`, and `server.listen` defaults to `:<containerPort>`.
 # fleetbox refuses to serve beyond loopback without `auth.oidc`, so the chart
-# refuses to render without it.
+# refuses to render without it or without `server.publicURL`, the external URL
+# the OIDC redirect (`<publicURL>/auth/callback`) is derived from. The chart
+# supports OIDC only; `auth.proxy` needs a hand-built pod with the proxy as a
+# sidecar.
 config:
   server:
     publicURL: ""
@@ -27,6 +30,11 @@ config:
   #     issuer: https://sso.example.com/realms/example
   #     clientID: fleetbox
   #     clientSecretFile: /etc/fleetbox/oidc/client-secret
+  #     # Optional: scopes besides openid, the claim holding group names, and
+  #     # how long a sign-in lasts.
+  #     scopes: [profile, email]
+  #     groupsClaim: groups
+  #     sessionTTL: 12h
   #   roles:
   #     - group: platform
   #       targets: ["*"]

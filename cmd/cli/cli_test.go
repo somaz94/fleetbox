@@ -3,15 +3,18 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/somaz94/fleetbox/internal/auth/oidctest"
 	"github.com/somaz94/fleetbox/internal/config"
 	"github.com/somaz94/fleetbox/internal/model"
 	"github.com/somaz94/fleetbox/internal/provider"
@@ -159,6 +162,95 @@ func TestServe(t *testing.T) {
 	}
 }
 
+// startServe runs serve on an ephemeral port until the test ends.
+func startServe(t *testing.T, cfg *config.Config, ln net.Listener) string {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- serve(ctx, cfg, ln, "error") }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Error(err)
+			}
+		case <-time.After(15 * time.Second):
+			t.Error("serve did not stop")
+		}
+	})
+	base := "http://" + ln.Addr().String()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		resp, err := http.Get(base + "/healthz")
+		if err == nil {
+			resp.Body.Close()
+			return base
+		}
+		if time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestServeOIDC(t *testing.T) {
+	idp := oidctest.New(t, "fleetbox", "s3cret")
+	idp.Configure(func(b *oidctest.Behaviour) { b.User, b.Groups = "alice", []string{"developers"} })
+	dir := t.TempDir()
+	secret := filepath.Join(dir, "client-secret")
+	os.WriteFile(secret, []byte("s3cret"), 0o600)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := "http://" + ln.Addr().String()
+	doc := fmt.Sprintf(`server: {publicURL: %q}
+store: {path: %q}
+auth:
+  oidc: {issuer: %q, clientID: fleetbox, clientSecretFile: %q}
+  roles:
+    - {group: developers, targets: ["a"], role: viewer}
+targets:
+`, base, filepath.Join(dir, "fleetbox.db"), idp.URL, secret) + goodTargets
+	cfg, err := config.Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	startServe(t, cfg, ln)
+
+	jar, _ := cookiejar.New(nil)
+	browser := &http.Client{Jar: jar}
+	get := func(path string) (int, string) {
+		t.Helper()
+		resp, err := browser.Get(base + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	if code, body := get("/api/v1/targets"); code != http.StatusUnauthorized || !strings.Contains(body, `"unauthorized"`) {
+		t.Fatalf("targets before login = %d %s", code, body)
+	}
+	// The login lands on "/", which the console will serve; until then it is a 404.
+	if code, _ := get("/auth/login"); code != http.StatusNotFound {
+		t.Fatalf("login = %d", code)
+	}
+	if code, body := get("/api/v1/me"); code != http.StatusOK || !strings.Contains(body, `"user":"alice"`) ||
+		!strings.Contains(body, `"targets":[{"name":"a","role":"viewer"}]`) {
+		t.Fatalf("me = %d %s", code, body)
+	}
+	if _, body := get("/api/v1/targets"); !strings.Contains(body, `"name":"a"`) || strings.Contains(body, `"name":"b"`) {
+		t.Fatalf("targets = %s", body)
+	}
+	if code, _ := get("/healthz"); code != http.StatusOK {
+		t.Fatal("probes must not need a session")
+	}
+}
+
 func TestServeErrors(t *testing.T) {
 	listen := func() net.Listener {
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -173,10 +265,11 @@ func TestServeErrors(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 
-	// OIDC is configured but not implemented yet: refuse rather than serve unauthenticated.
+	// An unreadable OIDC client secret stops the server before it listens.
 	withOIDC := *cfg
-	withOIDC.Auth.OIDC = &config.OIDC{Issuer: "https://sso.example.com", ClientID: "fleetbox"}
-	if err := serve(context.Background(), &withOIDC, listen(), "info"); err == nil || !strings.Contains(err.Error(), "not implemented yet") {
+	withOIDC.Auth.OIDC = &config.OIDC{Issuer: "https://sso.example.com", ClientID: "fleetbox",
+		ClientSecretFile: filepath.Join(t.TempDir(), "missing")}
+	if err := serve(context.Background(), &withOIDC, listen(), "info"); err == nil || !strings.Contains(err.Error(), "clientSecretFile") {
 		t.Fatalf("err = %v", err)
 	}
 

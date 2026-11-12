@@ -54,6 +54,9 @@ mounted volume and `server.listen` defaulted to the container port.
 {{- fail "config.auth.oidc is required: fleetbox refuses to serve beyond loopback without authentication" }}
 {{- end }}
 {{- $server := default dict $cfg.server }}
+{{- if not $server.publicURL }}
+{{- fail "config.server.publicURL is required: the OIDC redirect URL is derived from it" }}
+{{- end }}
 {{- if not $server.listen }}
 {{- $_ := set $server "listen" (printf ":%d" (int .Values.containerPort)) }}
 {{- end }}

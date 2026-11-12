@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -21,11 +22,13 @@ import (
 	"github.com/getkin/kin-openapi/routers"
 	"github.com/getkin/kin-openapi/routers/legacy"
 
+	"github.com/somaz94/fleetbox/internal/auth"
 	"github.com/somaz94/fleetbox/internal/config"
 	"github.com/somaz94/fleetbox/internal/core"
 	"github.com/somaz94/fleetbox/internal/inventory"
 	"github.com/somaz94/fleetbox/internal/model"
 	"github.com/somaz94/fleetbox/internal/provider"
+	"github.com/somaz94/fleetbox/internal/store"
 )
 
 var (
@@ -104,7 +107,32 @@ type harness struct {
 	router routers.Router
 }
 
+// newHarness serves the API without authentication, as on loopback.
 func newHarness(t *testing.T) *harness {
+	t.Helper()
+	return newHarnessWith(t, config.Auth{})
+}
+
+// proxyAuth identifies callers by X-User and X-Groups, which lets a test pick
+// the caller per request.
+var proxyAuth = config.Auth{
+	Proxy: &config.Proxy{UserHeader: "X-User", GroupsHeader: "X-Groups"},
+	Roles: []config.RoleRule{
+		{Group: "platform", Targets: []string{"*"}, Role: config.RoleOperator},
+		{Group: "developers", Targets: []string{"prod"}, Role: config.RoleViewer},
+	},
+}
+
+func newHarnessWith(t *testing.T, a config.Auth) *harness {
+	t.Helper()
+	authn, err := auth.New(&config.Config{Auth: a}, nil, discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newHarnessAuth(t, authn)
+}
+
+func newHarnessAuth(t *testing.T, authn *auth.Service) *harness {
 	t.Helper()
 	fp := &fakeProvider{inv: fixture()}
 	fp.detail = model.ServiceDetail{Service: fp.inv.Services[0], Instances: fp.inv.Instances}
@@ -121,19 +149,35 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec.Servers = openapi3.Servers{{URL: "http://fleetbox.test/api/v1"}}
+	spec.Servers = openapi3.Servers{{URL: "http://127.0.0.1:8080/api/v1"}}
 	router, err := legacy.NewRouter(spec)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &harness{h: NewHandler(c, discard), fp: fp, stops: stops, router: router}
+	return &harness{h: NewHandler(c, authn, discard), fp: fp, stops: stops, router: router}
 }
 
-// do sends a request and validates every JSON response against the spec,
-// including that the status code is one the operation documents.
+// do sends a request as a browser on the console would, CSRF header and
+// Origin included, and validates the response against the spec.
 func (h *harness) do(t *testing.T, method, target string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(method, "http://fleetbox.test"+target, nil)
+	hdr := http.Header{}
+	if method != http.MethodGet {
+		hdr.Set(auth.CSRFHeader, "1")
+		hdr.Set("Origin", "http://127.0.0.1:8080")
+	}
+	return h.doWith(t, method, target, hdr)
+}
+
+// doWith sends a request with exactly the given headers and validates every
+// JSON response against the spec, including that the status code is one the
+// operation documents.
+func (h *harness) doWith(t *testing.T, method, target string, hdr http.Header) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, "http://127.0.0.1:8080"+target, nil)
+	for k, v := range hdr {
+		req.Header[k] = v
+	}
 	rec := httptest.NewRecorder()
 	h.h.ServeHTTP(rec, req)
 	if !strings.HasPrefix(rec.Header().Get("Content-Type"), "application/json") {
@@ -303,6 +347,104 @@ func TestListServiceEvents(t *testing.T) {
 	}
 }
 
+func TestMe(t *testing.T) {
+	me := decode[Me](t, newHarness(t).do(t, "GET", "/api/v1/me"))
+	if me.User != "anonymous" || me.Mode != MeModeNone || me.Groups == nil || len(me.Targets) != 1 || me.Targets[0].Role != RoleOperator {
+		t.Fatalf("me = %+v", me)
+	}
+
+	h := newHarnessWith(t, proxyAuth)
+	as := func(groups string) Me {
+		return decode[Me](t, h.doWith(t, "GET", "/api/v1/me", http.Header{"X-User": {"alice"}, "X-Groups": {groups}}))
+	}
+	if me := as("developers"); me.User != "alice" || me.Mode != MeModeProxy || len(me.Groups) != 1 ||
+		len(me.Targets) != 1 || me.Targets[0] != (TargetRole{Name: "prod", Role: RoleViewer}) {
+		t.Fatalf("me = %+v", me)
+	}
+	if me := as("developers,platform"); me.Targets[0].Role != RoleOperator {
+		t.Fatalf("me = %+v", me)
+	}
+	if me := as(""); me.Targets == nil || len(me.Targets) != 0 {
+		t.Fatalf("me = %+v", me)
+	}
+}
+
+func TestAuthRequired(t *testing.T) {
+	h := newHarnessWith(t, proxyAuth)
+	for _, tt := range []struct{ method, path string }{
+		{"GET", "/api/v1/info"}, {"GET", "/api/v1/me"}, {"GET", "/api/v1/targets"}, {"GET", "/api/v1/services"},
+		{"GET", "/api/v1/services/prod/web/api"}, {"POST", "/api/v1/services/prod/web/api/refresh"},
+		{"GET", "/api/v1/services/prod/web/api/events"}, {"GET", "/api/v1/services/prod/web/api/instances/t1/logs"},
+		{"GET", "/api/v1/nope"},
+	} {
+		wantError(t, h.do(t, tt.method, tt.path), http.StatusUnauthorized, ErrorErrorCodeUnauthorized)
+	}
+}
+
+func TestHiddenTargets(t *testing.T) {
+	h := newHarnessWith(t, proxyAuth)
+	h.fp.logs = &provider.SliceStream{Lines: []model.LogLine{{Text: "x"}}}
+	stranger := http.Header{"X-User": {"mallory"}, "X-Groups": {"contractors"}}
+	if got := decode[[]Target](t, h.doWith(t, "GET", "/api/v1/targets", stranger)); len(got) != 0 {
+		t.Fatalf("targets = %+v", got)
+	}
+	if got := decode[[]Service](t, h.doWith(t, "GET", "/api/v1/services", stranger)); len(got) != 0 {
+		t.Fatalf("services = %+v", got)
+	}
+	// A hidden target reads exactly like an unknown one.
+	unknown := wantError(t, h.doWith(t, "GET", "/api/v1/services/nope/web/api", stranger), http.StatusNotFound, ErrorErrorCodeNotFound)
+	hidden := wantError(t, h.doWith(t, "GET", "/api/v1/services/prod/web/api", stranger), http.StatusNotFound, ErrorErrorCodeNotFound)
+	if strings.ReplaceAll(hidden.Error.Message, "prod", "nope") != unknown.Error.Message {
+		t.Fatalf("hidden %q, unknown %q", hidden.Error.Message, unknown.Error.Message)
+	}
+	post := stranger.Clone()
+	post.Set(auth.CSRFHeader, "1")
+	post.Set("Origin", "http://127.0.0.1:8080")
+	wantError(t, h.doWith(t, "POST", "/api/v1/services/prod/web/api/refresh", post), http.StatusNotFound, ErrorErrorCodeNotFound)
+	wantError(t, h.doWith(t, "GET", "/api/v1/services/prod/web/api/events", stranger), http.StatusNotFound, ErrorErrorCodeNotFound)
+	wantError(t, h.doWith(t, "GET", "/api/v1/services/prod/web/api/instances/t1/logs", stranger), http.StatusNotFound, ErrorErrorCodeNotFound)
+
+	viewer := http.Header{"X-User": {"alice"}, "X-Groups": {"developers"}}
+	if got := decode[[]Service](t, h.doWith(t, "GET", "/api/v1/services", viewer)); len(got) != 1 {
+		t.Fatalf("services = %+v", got)
+	}
+	if rec := h.doWith(t, "GET", "/api/v1/services/prod/web/api/instances/t1/logs", viewer); rec.Code != http.StatusOK {
+		t.Fatalf("logs = %d", rec.Code)
+	}
+}
+
+func TestCSRF(t *testing.T) {
+	h := newHarness(t)
+	path := "/api/v1/services/prod/web/api/refresh"
+	wantError(t, h.doWith(t, "POST", path, nil), http.StatusForbidden, ErrorErrorCodeForbidden)
+	wantError(t, h.doWith(t, "POST", path, http.Header{auth.CSRFHeader: {"1"}, "Origin": {"https://evil.example.com"}}),
+		http.StatusForbidden, ErrorErrorCodeForbidden)
+	if rec := h.do(t, "POST", path); rec.Code != http.StatusOK {
+		t.Fatalf("same-origin refresh = %d: %s", rec.Code, rec.Body)
+	}
+}
+
+func TestSessionStoreFailure(t *testing.T) {
+	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	cfg := &config.Config{Server: config.Server{PublicURL: "http://127.0.0.1:8080"},
+		Auth: config.Auth{OIDC: &config.OIDC{Issuer: "https://sso.example.com", ClientID: "fleetbox", SessionTTL: time.Hour}}}
+	authn, err := auth.New(cfg, st, discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newHarnessAuth(t, authn)
+	wantError(t, h.do(t, "GET", "/api/v1/info"), http.StatusUnauthorized, ErrorErrorCodeUnauthorized)
+	cookie := http.Header{"Cookie": {auth.SessionCookie + "=token"}}
+	e := wantError(t, h.doWith(t, "GET", "/api/v1/info", cookie), http.StatusInternalServerError, ErrorErrorCodeInternal)
+	if strings.Contains(e.Error.Message, "closed") {
+		t.Fatal("an internal error leaked its text")
+	}
+}
+
 func TestUnknownEndpoint(t *testing.T) {
 	h := newHarness(t)
 	wantError(t, h.do(t, "GET", "/api/v1/nope"), http.StatusNotFound, ErrorErrorCodeNotFound)
@@ -378,7 +520,7 @@ func TestStreamLogs(t *testing.T) {
 
 	// A writer that cannot flush cannot stream.
 	nf := &noFlush{header: http.Header{}}
-	h.h.ServeHTTP(nf, httptest.NewRequest("GET", path, nil))
+	h.h.ServeHTTP(nf, httptest.NewRequest("GET", "http://127.0.0.1:8080"+path, nil))
 	if nf.status != http.StatusInternalServerError {
 		t.Fatalf("status = %d", nf.status)
 	}
