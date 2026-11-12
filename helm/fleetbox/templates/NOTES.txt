@@ -1,0 +1,14 @@
+fleetbox is starting with {{ len .Values.config.targets }} target(s).
+
+{{- if .Values.ingress.enabled }}
+Open:
+{{- range .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}/
+{{- end }}
+{{- else }}
+Reach it with:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "fleetbox.fullname" . }} 8080:{{ .Values.service.port }}
+{{- end }}
+
+Validate the configuration before rolling it out:
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "fleetbox.fullname" . }} -- /fleetbox check --config /etc/fleetbox/config/config.yaml

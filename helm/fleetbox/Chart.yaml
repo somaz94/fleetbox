@@ -1,0 +1,22 @@
+apiVersion: v2
+name: fleetbox
+description: Web console for containers outside Kubernetes, ECS services and Docker hosts in one view
+type: application
+version: 0.1.0
+appVersion: "v0.1.0"
+
+kubeVersion: ">=1.25.0-0"
+
+keywords:
+  - ecs
+  - docker
+  - console
+  - containers
+
+home: https://github.com/somaz94/fleetbox
+sources:
+  - https://github.com/somaz94/fleetbox
+
+maintainers:
+  - name: somaz94
+    url: https://github.com/somaz94

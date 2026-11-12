@@ -1,0 +1,135 @@
+# Default values for fleetbox. One replica only: the store is SQLite on a
+# ReadWriteOnce volume, so the Deployment uses the Recreate strategy.
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: somaz940/fleetbox
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: ""
+
+imagePullSecrets: []
+
+logLevel: info
+
+# The fleetbox configuration file (docs/DESIGN.md, Configuration). Rendered
+# into a ConfigMap; it holds paths, never secrets. `store` is set by the chart
+# from `persistence`, and `server.listen` defaults to `:<containerPort>`.
+# fleetbox refuses to serve beyond loopback without `auth.oidc`, so the chart
+# refuses to render without it.
+config:
+  server:
+    publicURL: ""
+  auth: {}
+  #   oidc:
+  #     issuer: https://sso.example.com/realms/example
+  #     clientID: fleetbox
+  #     clientSecretFile: /etc/fleetbox/oidc/client-secret
+  #   roles:
+  #     - group: platform
+  #       targets: ["*"]
+  #       role: operator
+  targets: []
+  #   - name: prod-aws
+  #     provider: ecs
+  #     env: prod
+  #     readonly: true
+  #     ecs:
+  #       region: ap-northeast-2
+  #       readRoleArn: arn:aws:iam::123456789012:role/fleetbox-read
+  #   - name: build-host-1
+  #     provider: docker
+  #     docker:
+  #       host: 192.0.2.10
+  #       user: fleetbox
+  #       keyFile: /etc/fleetbox/ssh/id_ed25519
+  #       knownHostsFile: /etc/fleetbox/ssh/known_hosts
+
+# OIDC client secret, mounted at /etc/fleetbox/oidc/client-secret.
+oidc:
+  existingSecret: ""
+  secretKey: client-secret
+
+# SSH material for Docker targets, mounted read-only at /etc/fleetbox/ssh.
+# The Secret's keys become file names, e.g. id_ed25519 and known_hosts.
+ssh:
+  existingSecret: ""
+
+# AWS credentials for ECS targets. Each target assumes its own role on top of
+# whichever base identity is configured here.
+aws:
+  # Self-hosted IRSA: the cluster's service-account issuer is registered as an
+  # IAM OIDC provider and this role trusts the fleetbox ServiceAccount.
+  webIdentity:
+    enabled: false
+    roleArn: ""
+    audience: sts.amazonaws.com
+    expirationSeconds: 3600
+  # Static keys: a Secret with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.
+  existingSecret: ""
+
+extraEnv: []
+extraVolumes: []
+extraVolumeMounts: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+containerPort: 8080
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []
+  #   - host: fleetbox.example.com
+  #     paths:
+  #       - path: /
+  #         pathType: Prefix
+  tls: []
+
+persistence:
+  enabled: true
+  existingClaim: ""
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 1Gi
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+
+terminationGracePeriodSeconds: 15
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

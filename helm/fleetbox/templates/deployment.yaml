@@ -1,0 +1,158 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "fleetbox.fullname" . }}
+  labels:
+    {{- include "fleetbox.labels" . | nindent 4 }}
+spec:
+  # SQLite on a ReadWriteOnce volume: one replica, and the old pod must release
+  # the volume before the new one starts.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "fleetbox.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include "fleetbox.config" . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "fleetbox.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "fleetbox.serviceAccountName" . }}
+      # fleetbox never calls the Kubernetes API; only the web-identity token is mounted.
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      containers:
+        - name: fleetbox
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - serve
+            - --config=/etc/fleetbox/config/config.yaml
+            - --log-level={{ .Values.logLevel }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.containerPort }}
+              protocol: TCP
+          env:
+            # SQLite writes temporary files here; the root filesystem is read-only.
+            - name: TMPDIR
+              value: /tmp
+            {{- if .Values.aws.webIdentity.enabled }}
+            - name: AWS_ROLE_ARN
+              value: {{ required "aws.webIdentity.roleArn is required when aws.webIdentity.enabled" .Values.aws.webIdentity.roleArn | quote }}
+            - name: AWS_WEB_IDENTITY_TOKEN_FILE
+              value: /var/run/secrets/aws/token
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.aws.existingSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ . }}
+          {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/fleetbox/config
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/fleetbox
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.oidc.existingSecret }}
+            - name: oidc
+              mountPath: /etc/fleetbox/oidc
+              readOnly: true
+            {{- end }}
+            {{- if .Values.ssh.existingSecret }}
+            - name: ssh
+              mountPath: /etc/fleetbox/ssh
+              readOnly: true
+            {{- end }}
+            {{- if .Values.aws.webIdentity.enabled }}
+            - name: aws-token
+              mountPath: /var/run/secrets/aws
+              readOnly: true
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "fleetbox.fullname" . }}
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (include "fleetbox.fullname" .) }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: tmp
+          emptyDir: {}
+        {{- with .Values.oidc.existingSecret }}
+        - name: oidc
+          secret:
+            secretName: {{ . }}
+            defaultMode: 0400
+            items:
+              - key: {{ $.Values.oidc.secretKey }}
+                path: client-secret
+        {{- end }}
+        {{- with .Values.ssh.existingSecret }}
+        - name: ssh
+          secret:
+            secretName: {{ . }}
+            defaultMode: 0400
+        {{- end }}
+        {{- if .Values.aws.webIdentity.enabled }}
+        - name: aws-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: {{ .Values.aws.webIdentity.audience }}
+                  expirationSeconds: {{ .Values.aws.webIdentity.expirationSeconds }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

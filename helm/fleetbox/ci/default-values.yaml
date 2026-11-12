@@ -1,0 +1,47 @@
+# Render test values for CI: every optional block switched on, placeholder values only.
+config:
+  server:
+    publicURL: https://fleetbox.example.com
+  auth:
+    oidc:
+      issuer: https://sso.example.com/realms/example
+      clientID: fleetbox
+      clientSecretFile: /etc/fleetbox/oidc/client-secret
+    roles:
+      - group: platform
+        targets: ["*"]
+        role: operator
+  targets:
+    - name: prod-aws
+      provider: ecs
+      env: prod
+      readonly: true
+      ecs:
+        region: ap-northeast-2
+        readRoleArn: arn:aws:iam::123456789012:role/fleetbox-read
+    - name: build-host-1
+      provider: docker
+      docker:
+        host: 192.0.2.10
+        user: fleetbox
+        keyFile: /etc/fleetbox/ssh/id_ed25519
+        knownHostsFile: /etc/fleetbox/ssh/known_hosts
+oidc:
+  existingSecret: fleetbox-oidc
+ssh:
+  existingSecret: fleetbox-ssh
+aws:
+  webIdentity:
+    enabled: true
+    roleArn: arn:aws:iam::123456789012:role/fleetbox-base
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: fleetbox.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - hosts: [fleetbox.example.com]
+      secretName: fleetbox-tls

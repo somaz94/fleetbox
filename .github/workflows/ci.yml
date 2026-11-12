@@ -73,3 +73,68 @@ jobs:
 
       - name: Verify version
         run: ./bin/fleetbox version
+
+  helm:
+    name: Helm Chart
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v5
+
+      - name: Lint
+        run: helm lint helm/fleetbox -f helm/fleetbox/ci/default-values.yaml
+
+      - name: Rendering without auth.oidc fails
+        run: |
+          if helm template t helm/fleetbox > /dev/null 2> err.txt; then
+            echo "::error::the chart rendered without auth.oidc"
+            exit 1
+          fi
+          grep -q 'config.auth.oidc is required' err.txt
+
+      - name: The rendered config passes fleetbox check
+        run: |
+          make build
+          d=$(mktemp -d)
+          ssh-keygen -q -t ed25519 -N '' -f "$d/id_ed25519"
+          : > "$d/known_hosts"
+          helm template t helm/fleetbox -f helm/fleetbox/ci/default-values.yaml \
+            | yq 'select(.kind == "ConfigMap") | .data["config.yaml"]' \
+            | sed "s#/etc/fleetbox/ssh#$d#" > "$d/config.yaml"
+          ./bin/fleetbox check --config "$d/config.yaml"
+
+  docker:
+    name: Docker Build
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: false
+          load: true
+          tags: fleetbox:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run the image
+        run: docker run --rm fleetbox:ci version

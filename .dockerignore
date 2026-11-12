@@ -1,0 +1,12 @@
+bin/
+.git/
+.github/
+.claude/
+docs/
+examples/
+helm/
+api/
+*.md
+LICENSE
+coverage*.out
+**/*_test.go

@@ -1,4 +1,4 @@
-.PHONY: build test cover generate fmt vet lint check-config clean help
+.PHONY: build test cover generate fmt vet lint check-config docker-build helm-lint clean help
 
 APP_NAME=fleetbox
 MODULE=github.com/somaz94/fleetbox
@@ -36,6 +36,13 @@ lint: vet ## Check formatting and vet
 check-config: build ## Validate a configuration file (usage: make check-config CONFIG=path)
 	@test -n "$(CONFIG)" || { echo "usage: make check-config CONFIG=path"; exit 1; }
 	./bin/$(APP_NAME) check --config $(CONFIG)
+
+docker-build: ## Build the container image for the local platform as fleetbox:dev
+	docker build --build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) --build-arg BUILD_DATE=$(BUILD_DATE) -t $(APP_NAME):dev .
+
+helm-lint: ## Lint the chart and render it with the CI values
+	helm lint helm/$(APP_NAME) -f helm/$(APP_NAME)/ci/default-values.yaml
+	helm template ci helm/$(APP_NAME) -f helm/$(APP_NAME)/ci/default-values.yaml > /dev/null
 
 clean: ## Remove build artifacts and coverage files
 	rm -rf bin/ coverage.out coverage.hand.out

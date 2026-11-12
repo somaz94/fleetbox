@@ -305,8 +305,9 @@ Thresholds are configuration, and each finding carries the evidence it was raise
 
 ## Deployment
 
-- One container image published to GHCR: distroless, non-root, the React build embedded.
-- A Helm chart in this repository, published as an OCI artefact: Deployment with one replica and the `Recreate` strategy (SQLite on a PVC), Service, optional Ingress, ServiceAccount (for self-hosted IRSA), Secrets for OIDC, SSH and AWS material, and an optional NetworkPolicy.
+- One container image published to Docker Hub as `somaz940/fleetbox`, the same registry as the sibling projects: distroless, non-root, multi-architecture, the React build embedded.
+- A Helm chart in `helm/fleetbox`, published as an OCI artefact on GHCR and as a classic repository on the `gh-pages` branch: Deployment with one replica and the `Recreate` strategy (SQLite on a PVC), Service, optional Ingress, a ServiceAccount whose token is mounted only as the audience-bound AWS web-identity token, and Secrets for OIDC, SSH and static AWS material referenced by name. The chart refuses to render without `config.auth.oidc`, mirroring the server's refusal to serve beyond loopback unauthenticated, and it sets `store.path` itself.
+- A release is a `vX.Y.Z` tag: the image, the GitHub release (notes from git-cliff) and the chart publish from it, and the major tag (`v1`) follows automatically. The chart's own `version` is bumped by hand in the release commit; its `appVersion` follows the tag.
 - Health endpoints: `/healthz` for liveness, `/readyz` once configuration loaded and the store opened. Readiness does not depend on any target being reachable.
 - Prometheus metrics: refresh duration and errors per target, cache age, operations by result.
 

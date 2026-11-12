@@ -14,6 +14,8 @@ make test    # go test -race with coverage, two packages at a time
 make lint    # gofmt check and go vet
 make cover   # the coverage total the 90% rule applies to
 make generate # regenerate internal/api/api.gen.go after editing api/openapi.yaml
+make helm-lint # lint and render the chart
+make docker-build # local image as fleetbox:dev
 ```
 
 `make help` lists every target.
@@ -32,6 +34,7 @@ One role per directory:
 - `internal/core`: the service layer every transport calls (status derivation, filters, cache plus store)
 - `internal/api`: `/api/v1`; `api.gen.go` is generated, `server.go` implements it, `logs.go` is the hand-written SSE endpoint
 - `internal/store`: SQLite persistence for stop history and the audit log
+- `helm/fleetbox`: the chart; `ci/default-values.yaml` is what CI renders and checks
 
 <br/>
 
@@ -57,6 +60,8 @@ The reasoning for each is in `docs/DESIGN.md`. Changing one means changing that 
 - **OpenAPI error responses are inlined per operation**, not shared through `components/responses`: with a shared response the generator gives the first status of each operation a different Go shape, which changes whenever a status is added.
 - **A new status code needs the spec first**: the API tests validate every response against the spec, status included, and fail on an undocumented one.
 - **Not binding beyond loopback** is enforced in `config.Validate` until OIDC exists; do not relax it to make a deployment work.
+- **The chart and the config schema must agree**: CI renders the chart and runs `fleetbox check` on the result. A new config key needs the chart's `config` block (or `_helpers.tpl`) to produce it.
+- **Release automation** (`release.yml`, `helm-release.yml`, `cliff.toml`) follows the sibling repositories and is not changed without the user's approval. `RELEASE.md` is empty in the repository on purpose; git-cliff writes it during a release. Bump `helm/fleetbox/Chart.yaml` `version` in the release commit; `appVersion` follows the tag.
 - **Test data**: instance IDs in fixtures must be unique in their short form (Docker shows 12 characters); the conformance suite rejects duplicates.
 
 <br/>
