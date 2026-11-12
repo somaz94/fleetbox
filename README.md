@@ -2,7 +2,22 @@
 
 A web console for containers that run outside Kubernetes: Amazon ECS services and plain Docker hosts in one view, with what runs, which image digest, whether it is healthy and why it last stopped. It runs as one service in a Kubernetes cluster and is the only component holding the cloud and host credentials.
 
-> **Status**: early development, not released. The provider layer (ECS, Docker over SSH), the poller, the cache, the store, the read API, OIDC sign-in with group-to-target roles and a read-only console exist; operations do not yet. The roadmap is in [docs/DESIGN.md](docs/DESIGN.md#roadmap).
+> **Status**: early, read-only releases. The provider layer (ECS, Docker over SSH), the read API, OIDC sign-in with group-to-target roles and the console are released; operations (restart, scale) are not yet. Releases are listed on the [releases page](https://github.com/somaz94/fleetbox/releases), and the roadmap is in [docs/DESIGN.md](docs/DESIGN.md#roadmap).
+
+<br/>
+
+## Install
+
+The Helm chart is published as a classic repository and as an OCI artefact; both serve the same versions.
+
+```bash
+helm repo add fleetbox https://somaz94.github.io/fleetbox/helm-repo
+helm install fleetbox fleetbox/fleetbox -f values.yaml
+# or
+helm install fleetbox oci://ghcr.io/somaz94/charts/fleetbox -f values.yaml
+```
+
+The chart refuses to render without `config.auth.oidc` and `config.server.publicURL`; [helm/fleetbox/values.yaml](helm/fleetbox/values.yaml) documents every value. The image is `somaz940/fleetbox` on Docker Hub, tagged per release.
 
 <br/>
 

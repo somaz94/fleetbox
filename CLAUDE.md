@@ -2,7 +2,7 @@
 
 Web console for containers outside Kubernetes: Amazon ECS and Docker hosts first, other platforms as providers. Runs as one service in a Kubernetes cluster and serves a React console plus a versioned JSON API. Go backend.
 
-> **Status**: v0.2 in progress. Providers (ECS, Docker over SSH), the poller, the cache, the store, the read API (`api/openapi.yaml`), OIDC sign-in with role mapping, the read-only console, the Helm chart and `serve` / `check` exist; operations do not. `docs/DESIGN.md` is the source of truth for scope and decisions.
+> **Status**: the read-only scope of the roadmap is released: providers (ECS, Docker over SSH), the poller, the cache, the store, the read API (`api/openapi.yaml`), OIDC sign-in with role mapping, the console, the Helm chart and `serve` / `check`. Operations and the audit log are next. The latest version is the newest `vX.Y.Z` tag. `docs/DESIGN.md` is the source of truth for scope and decisions.
 
 <br/>
 
@@ -67,7 +67,7 @@ The reasoning for each is in `docs/DESIGN.md`. Changing one means changing that 
 - **Not binding beyond loopback** without `auth.oidc` is enforced in `config.Validate`, and it applies to proxy mode too, which is what keeps the trusted headers sidecar-only. Do not relax it to make a deployment work.
 - **Authorisation lives in `internal/api`**: every handler, the hand-written logs endpoint included, checks the caller's role on the target and answers 404 for a hidden target. A new endpoint taking a target must do the same.
 - **The chart and the config schema must agree**: CI renders the chart and runs `fleetbox check` on the result. A new config key needs the chart's `config` block (or `_helpers.tpl`) to produce it.
-- **Release automation** (`release.yml`, `helm-release.yml`, `cliff.toml`) follows the sibling repositories and is not changed without the user's approval. `RELEASE.md` is empty in the repository on purpose; git-cliff writes it during a release. Bump `helm/fleetbox/Chart.yaml` `version` in the release commit; `appVersion` follows the tag.
+- **Release automation** (`release.yml`, `helm-release.yml`, `cliff.toml`) follows the sibling repositories and is not changed without the user's approval. `RELEASE.md` is empty in the repository on purpose; git-cliff writes it during a release. Bump `helm/fleetbox/Chart.yaml` `version` and `appVersion` in a `chore: bump version to vX.Y.Z` commit, and push it to `main` before the tag. After a release, check the chart's OCI tag exists (`helm show chart oci://ghcr.io/somaz94/charts/fleetbox --version X.Y.Z`): the chart action continues on an OCI push error, so a failed push leaves the workflow green, and rerunning the Helm Chart Release run fixes it.
 - **Console placeholder**: `web/dist/.gitkeep` keeps `go:embed` compiling before `make web`; Vite empties `dist` on every build and copies `web/public/.gitkeep` back. Without a build the server answers 503 on `/`.
 - **`web/node_modules` is excluded by an `ignore` directive in `go.mod`**, and `make lint`/`make fmt` list Go files without it. Keep both when touching either.
 - **TypeScript stays on 5.x** while `openapi-typescript` needs its compiler API, which TypeScript 7 does not offer. Regenerate `web/package-lock.json` with npm 11 (`npx npm@11 install`), the version the Node 24 image runs `npm ci` with; npm 10 crashes resolving this tree.
