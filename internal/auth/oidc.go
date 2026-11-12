@@ -217,7 +217,7 @@ func (f *oidcFlow) callback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	token := randomToken()
-	sess := store.Session{ID: hashToken(token), User: user, Groups: stringList(claims[f.cfg.GroupsClaim]),
+	sess := store.Session{ID: hashToken(token), User: user, Subject: idt.Subject, Groups: stringList(claims[f.cfg.GroupsClaim]),
 		CreatedAt: now, ExpiresAt: now.Add(f.cfg.SessionTTL)}
 	if err := f.svc.sessions.CreateSession(r.Context(), sess); err != nil {
 		f.log.Error("create session", "err", err)

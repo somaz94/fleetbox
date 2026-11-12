@@ -3,8 +3,10 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -218,5 +220,56 @@ func TestEventsAndLogs(t *testing.T) {
 	}
 	if c.Build().Version != "v0.1.0" || len(c.Targets()) != 2 {
 		t.Fatal("build or targets wrong")
+	}
+	if ts, ok := c.Target("host"); !ok || ts.Provider != "docker" {
+		t.Fatalf("target = %+v, %v", ts, ok)
+	}
+}
+
+type operatingProvider struct {
+	fakeProvider
+	calls []string
+	err   error
+}
+
+func (o *operatingProvider) Restart(_ context.Context, ref model.ServiceRef) error {
+	o.calls = append(o.calls, "restart "+ref.String())
+	return o.err
+}
+
+func (o *operatingProvider) Scale(_ context.Context, ref model.ServiceRef, desired int) error {
+	o.calls = append(o.calls, fmt.Sprintf("scale %s %d", ref, desired))
+	return o.err
+}
+
+func TestOperations(t *testing.T) {
+	op := &operatingProvider{fakeProvider: fakeProvider{kind: "ecs"}}
+	targets := []inventory.Target{
+		{Config: config.Target{Name: "prod"}, Provider: op},
+		{Config: config.Target{Name: "host"}, Provider: &fakeProvider{kind: "docker"}},
+	}
+	c := New(targets, inventory.NewCache(), nil, &fakeStops{}, BuildInfo{})
+	ctx := context.Background()
+	if err := c.Restart(ctx, apiRef); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Scale(ctx, apiRef, 3); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(op.calls, ";") != "restart prod/web/api;scale prod/web/api 3" {
+		t.Fatalf("calls = %q", op.calls)
+	}
+	op.err = provider.ErrUnreachable
+	if err := c.Restart(ctx, apiRef); !errors.Is(err, provider.ErrUnreachable) {
+		t.Fatalf("provider error: %v", err)
+	}
+	if err := c.Scale(ctx, webRef, 1); !errors.Is(err, provider.ErrUnsupported) {
+		t.Fatalf("provider without operations: %v", err)
+	}
+	if err := c.Restart(ctx, model.ServiceRef{Target: "nope"}); !errors.Is(err, provider.ErrNotFound) {
+		t.Fatalf("unknown target: %v", err)
+	}
+	if err := c.Scale(ctx, model.ServiceRef{Target: "nope"}, 1); !errors.Is(err, provider.ErrNotFound) {
+		t.Fatalf("unknown target: %v", err)
 	}
 }

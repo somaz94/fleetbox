@@ -219,6 +219,10 @@ func newOIDCEnv(t *testing.T, secret string, mutate func(*config.OIDC)) *oidcEnv
 		}
 		fmt.Fprintf(w, "%s %s", p.User, strings.Join(p.Groups, ","))
 	})
+	mux.HandleFunc("/subject", func(w http.ResponseWriter, r *http.Request) {
+		p, _ := e.svc.Authenticate(r)
+		fmt.Fprint(w, p.Subject)
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "page ", r.URL.RequestURI()) })
 	e.srv.Config.Handler = mux
 	e.srv.Start()
@@ -341,6 +345,9 @@ func TestOIDCClaims(t *testing.T) {
 	e.get("/auth/login")
 	if _, body := e.get("/whoami"); body != "carol@example.com auditors" {
 		t.Fatalf("whoami = %q", body)
+	}
+	if _, body := e.get("/subject"); body != "sub-alice" {
+		t.Fatalf("subject = %q", body)
 	}
 	e.idp.Configure(func(b *oidctest.Behaviour) {
 		b.Claims = map[string]any{"preferred_username": nil, "roles": []any{"a", 1, ""}}

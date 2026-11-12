@@ -81,24 +81,56 @@ func TestStops(t *testing.T) {
 func TestAudit(t *testing.T) {
 	s, _ := open(t)
 	ctx := context.Background()
-	for i, res := range []string{ResultOK, ResultDenied} {
-		e := AuditEntry{Time: t0.Add(time.Duration(i) * time.Second), User: "alice", Service: ref, Action: "restart", Result: res}
-		if res == ResultDenied {
-			e.Error = "target is read-only"
-		}
-		if err := s.AppendAudit(ctx, e); err != nil {
+	other := model.ServiceRef{Target: "staging", Scope: "web", Name: "api"}
+	add := func(e AuditEntry) int64 {
+		t.Helper()
+		id, err := s.AppendAudit(ctx, e)
+		if err != nil {
 			t.Fatal(err)
 		}
+		return id
 	}
-	if err := s.AppendAudit(ctx, AuditEntry{User: "alice"}); err == nil {
+	first := add(AuditEntry{Time: t0, User: "alice", Subject: "sub-1", Service: ref, Action: "restart", Result: ResultPending})
+	add(AuditEntry{Time: t0.Add(time.Second), User: "bob", Service: other, Action: "scale", Params: `{"desired":2}`, Result: ResultOK})
+	last := add(AuditEntry{Time: t0.Add(2 * time.Second), User: "alice", Service: ref, Action: "scale", Result: ResultDenied, Error: "forbidden: read-only"})
+	if _, err := s.AppendAudit(ctx, AuditEntry{User: "alice"}); err == nil {
 		t.Fatal("incomplete entry accepted")
 	}
-	got, err := s.Audit(ctx, 10)
+
+	if err := s.FinishAudit(ctx, first, ResultError, "unreachable"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishAudit(ctx, first, ResultOK, ""); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("finishing a finished entry: %v", err)
+	}
+	if err := s.FinishAudit(ctx, last, ResultOK, ""); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("finishing a denied entry: %v", err)
+	}
+
+	got, err := s.Audit(ctx, AuditQuery{Targets: []string{"prod", "staging"}, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got[0].Result != ResultDenied || got[0].Error == "" || got[1].Service != ref || !got[1].Time.Equal(t0) {
+	if len(got) != 3 || got[0].ID != last || got[0].Error == "" || got[1].Params != `{"desired":2}` {
 		t.Fatalf("audit = %+v", got)
+	}
+	if e := got[2]; e.Result != ResultError || e.Error != "unreachable" || e.Subject != "sub-1" || e.Service != ref || !e.Time.Equal(t0) {
+		t.Fatalf("finished entry = %+v", e)
+	}
+
+	got, _ = s.Audit(ctx, AuditQuery{Targets: []string{"prod"}, Limit: 10})
+	if len(got) != 2 || got[0].Service.Target != "prod" || got[1].Service.Target != "prod" {
+		t.Fatalf("one target = %+v", got)
+	}
+	got, _ = s.Audit(ctx, AuditQuery{Targets: []string{"prod", "staging"}, Before: last, Limit: 1})
+	if len(got) != 1 || got[0].Service != other {
+		t.Fatalf("page before %d = %+v", last, got)
+	}
+	if got, err := s.Audit(ctx, AuditQuery{Limit: 10}); err != nil || len(got) != 0 {
+		t.Fatalf("no targets = %+v, %v", got, err)
+	}
+	if got, err := s.Audit(ctx, AuditQuery{Targets: []string{"prod"}, Limit: -1}); err != nil || len(got) != 0 {
+		t.Fatalf("no limit = %+v, %v", got, err)
 	}
 }
 
@@ -106,7 +138,7 @@ func TestSessions(t *testing.T) {
 	s, _ := open(t)
 	ctx := context.Background()
 	for _, sess := range []Session{
-		{ID: "live", User: "alice", Groups: []string{"platform", "dev"}, CreatedAt: t0, ExpiresAt: t0.Add(time.Hour)},
+		{ID: "live", User: "alice", Subject: "sub-1", Groups: []string{"platform", "dev"}, CreatedAt: t0, ExpiresAt: t0.Add(time.Hour)},
 		{ID: "old", User: "bob", CreatedAt: t0.Add(-2 * time.Hour), ExpiresAt: t0.Add(-time.Hour)},
 	} {
 		if err := s.CreateSession(ctx, sess); err != nil {
@@ -123,7 +155,7 @@ func TestSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.User != "alice" || len(got.Groups) != 2 || got.Groups[1] != "dev" || !got.CreatedAt.Equal(t0) || !got.ExpiresAt.Equal(t0.Add(time.Hour)) {
+	if got.User != "alice" || got.Subject != "sub-1" || len(got.Groups) != 2 || got.Groups[1] != "dev" || !got.CreatedAt.Equal(t0) || !got.ExpiresAt.Equal(t0.Add(time.Hour)) {
 		t.Fatalf("session = %+v", got)
 	}
 	if _, err := s.Session(ctx, "live", t0.Add(time.Hour)); !errors.Is(err, ErrNotFound) {
@@ -145,7 +177,7 @@ func TestSessions(t *testing.T) {
 		t.Fatalf("deleted session: err = %v", err)
 	}
 
-	if _, err := s.db.Exec(`INSERT INTO sessions VALUES ('bad', 'eve', 'not json', 0, ?)`, t0.Add(time.Hour).UnixMilli()); err != nil {
+	if _, err := s.db.Exec(`INSERT INTO sessions (id, user, groups, created_at, expires_at) VALUES ('bad', 'eve', 'not json', 0, ?)`, t0.Add(time.Hour).UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Session(ctx, "bad", t0); err == nil || !strings.Contains(err.Error(), "session groups") {
@@ -223,7 +255,13 @@ func TestClosedStoreErrors(t *testing.T) {
 	if _, err := s.PruneStops(ctx, t0); err == nil {
 		t.Fatal("PruneStops on a closed store")
 	}
-	if _, err := s.Audit(ctx, 1); err == nil {
+	if _, err := s.AppendAudit(ctx, AuditEntry{User: "u", Action: "restart", Result: ResultPending}); err == nil {
+		t.Fatal("AppendAudit on a closed store")
+	}
+	if err := s.FinishAudit(ctx, 1, ResultOK, ""); err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatalf("FinishAudit on a closed store: %v", err)
+	}
+	if _, err := s.Audit(ctx, AuditQuery{Targets: []string{"prod"}, Limit: 1}); err == nil {
 		t.Fatal("Audit on a closed store")
 	}
 	if err := s.CreateSession(ctx, Session{ID: "a", User: "u"}); err == nil {
@@ -234,5 +272,39 @@ func TestClosedStoreErrors(t *testing.T) {
 	}
 	if _, err := s.PruneSessions(ctx, t0); err == nil {
 		t.Fatal("PruneSessions on a closed store")
+	}
+}
+
+// A database written by v0.2 (two migrations) keeps its sessions and audit
+// rows, which read back with an empty subject.
+func TestMigrateFromV2(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fleetbox.db")
+	orig := migrations
+	t.Cleanup(func() { migrations = orig })
+	migrations = orig[:2]
+	old, err := Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := old.db.Exec(`INSERT INTO sessions VALUES ('s', 'alice', '[]', 0, ?)`, t0.Add(time.Hour).UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.db.Exec(`INSERT INTO audit (at, user, target, scope, service, action, result) VALUES (0, 'alice', 'prod', 'web', 'api', 'restart', 'ok')`); err != nil {
+		t.Fatal(err)
+	}
+	old.Close()
+
+	migrations = orig
+	s, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if sess, err := s.Session(ctx, "s", t0); err != nil || sess.User != "alice" || sess.Subject != "" {
+		t.Fatalf("session after migration = %+v, %v", sess, err)
+	}
+	if got, err := s.Audit(ctx, AuditQuery{Targets: []string{"prod"}, Limit: 5}); err != nil || len(got) != 1 || got[0].Subject != "" {
+		t.Fatalf("audit after migration = %+v, %v", got, err)
 	}
 }

@@ -221,9 +221,10 @@ Access to the Docker API is root on that host, which is why targets default to r
 - **Login state**: each login's state, PKCE verifier, nonce and post-login path travel in a ten-minute cookie sealed with AES-GCM under a key made at start-up. The cookie binds the callback to the browser that started it, so a link carrying someone else's state is refused, and starting logins costs the server no memory, so nobody can exhaust it without signing in. A restart abandons logins in progress; they are simply started again. The post-login path must be a local path without backslashes.
 - **Trusted-proxy mode** (optional, `auth.proxy`): accept the user and groups from headers set by oauth2-proxy or Pomerium. It is off by default because it is only safe when nothing but the proxy can reach the server, and it keeps the loopback rule below, so the proxy runs as a sidecar in the same pod. `server.publicURL` is required so the CSRF check knows the browser's origin, which a TLS-terminating sidecar hides from the request.
 - **Roles**: `viewer` and `operator`, granted by mapping groups to target name globs. The most permissive matching rule wins, and a target no rule grants is invisible to the user. Reading a service fresh (`POST …/refresh`) is a read, so viewers may do it. The groups are the ID token claim named by `auth.oidc.groupsClaim`, taken as written (Keycloak's group mapper prefixes `/` when "full group path" is on).
-- **Read-only targets**: `readonly: true` blocks every operation on the target whatever the role. A target with no operate role (ECS) or no operate permission (Docker) is read-only in effect.
+- **Read-only targets**: a target is read-only unless its configuration says `readonly: false`, and a read-only target refuses every operation whatever the role. A target with no operate role (ECS) cannot be operated either.
+- **Operation checks**, in this order: a target the caller holds no role on answers 404 like an unknown one; a viewer gets 403; a read-only target gets 403; an operation the provider lacks gets 501. Every check happens on the server, whatever the console shows.
 - **CSRF**: every request other than `GET`, `HEAD` and `OPTIONS` must carry the `X-Fleetbox-CSRF` header and an `Origin` equal to `server.publicURL` (or, without one, to the request's own host). A browser adds a custom header cross-origin only after a CORS preflight, which fleetbox never grants.
-- **Audit**: every operation, allowed or refused, is recorded with user, target, service, action, parameters and result.
+- **Audit**: every operation request on a configured target, allowed or refused, is recorded with user, OIDC subject, target, service, action, parameters and result. An allowed operation is written as `pending` before the provider is called and updated to `ok` or `error` afterwards, so one that cannot be recorded is not performed, and one interrupted by a restart stays visible as `pending`. The log keeps error codes and the messages a caller would see, never internal error text. A caller reads the entries on the targets they hold a role on (`GET /api/v1/audit`, newest first, paged by id).
 - No unauthenticated mode when bound to anything but loopback. Without `auth.oidc` or `auth.proxy`, the loopback-only server treats every caller as an operator, and it refuses any request whose `Host` is not a loopback name, so a page that reaches it by DNS rebinding gets nothing.
 
 <br/>
@@ -276,13 +277,13 @@ targets:
   - name: prod-aws
     provider: ecs
     env: prod
-    readonly: true
     ecs:
       region: ap-northeast-2
       readRoleArn: arn:aws:iam::123456789012:role/fleetbox-read
   - name: dev-aws
     provider: ecs
     env: dev
+    readonly: false
     ecs:
       region: ap-northeast-2
       readRoleArn: arn:aws:iam::210987654321:role/fleetbox-read
@@ -297,7 +298,7 @@ targets:
       knownHostsFile: /etc/fleetbox/ssh/known_hosts
 ```
 
-Unknown keys are an error, not a warning: a misspelled `readonly` must not silently leave a production target writable.
+A target is read-only unless it says `readonly: false`, so operating is an opt-in per target. Unknown keys are an error, not a warning: a misspelled `readonly` must not silently change what a target allows.
 
 `fleetbox check` loads the file and builds every provider without contacting any target, so a configuration can be validated in CI or before a rollout.
 

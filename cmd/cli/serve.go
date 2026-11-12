@@ -79,7 +79,7 @@ func serve(ctx context.Context, cfg *config.Config, ln net.Listener, logLevel st
 	}()
 
 	c := core.New(targets, cache, poller, st, core.BuildInfo{Version: Version, Commit: GitCommit, Date: BuildDate})
-	srv := &http.Server{Handler: newMux(api.NewHandler(c, authn, log), authn.Routes(), console.Handler(web.Dist())), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Handler: newMux(api.NewHandler(c, authn, st, log), authn.Routes(), console.Handler(web.Dist())), ReadHeaderTimeout: 10 * time.Second}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
 	log.Info("serving", "addr", ln.Addr().String(), "targets", len(targets), "auth", authn.Mode(), "version", Version)

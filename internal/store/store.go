@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite" // pure-Go driver, no cgo
@@ -20,9 +21,10 @@ import (
 
 // Audit results.
 const (
-	ResultOK     = "ok"
-	ResultDenied = "denied"
-	ResultError  = "error"
+	ResultPending = "pending"
+	ResultOK      = "ok"
+	ResultDenied  = "denied"
+	ResultError   = "error"
 )
 
 // AuditEntry records one attempted operation, allowed or not.
@@ -30,11 +32,20 @@ type AuditEntry struct {
 	ID      int64            `json:"id"`
 	Time    time.Time        `json:"time"`
 	User    string           `json:"user"`
+	Subject string           `json:"subject,omitempty"`
 	Service model.ServiceRef `json:"service"`
 	Action  string           `json:"action"`
 	Params  string           `json:"params,omitempty"`
 	Result  string           `json:"result"`
 	Error   string           `json:"error,omitempty"`
+}
+
+// AuditQuery selects a page of the audit log. Only entries on Targets are
+// returned, so an empty Targets returns nothing.
+type AuditQuery struct {
+	Targets []string
+	Before  int64 // entries with a smaller id; 0 for the newest
+	Limit   int
 }
 
 // ErrNotFound is returned for a session that does not exist or has expired.
@@ -45,6 +56,7 @@ var ErrNotFound = errors.New("store: not found")
 type Session struct {
 	ID        string
 	User      string
+	Subject   string
 	Groups    []string
 	CreatedAt time.Time
 	ExpiresAt time.Time
@@ -56,8 +68,9 @@ type Store interface {
 	RecordStops(ctx context.Context, recs []model.StopRecord) (int, error)
 	Stops(ctx context.Context, ref model.ServiceRef, limit int) ([]model.StopRecord, error)
 	PruneStops(ctx context.Context, before time.Time) (int, error)
-	AppendAudit(ctx context.Context, e AuditEntry) error
-	Audit(ctx context.Context, limit int) ([]AuditEntry, error)
+	AppendAudit(ctx context.Context, e AuditEntry) (int64, error)
+	FinishAudit(ctx context.Context, id int64, result, errText string) error
+	Audit(ctx context.Context, q AuditQuery) ([]AuditEntry, error)
 	CreateSession(ctx context.Context, s Session) error
 	Session(ctx context.Context, id string, now time.Time) (Session, error)
 	DeleteSession(ctx context.Context, id string) error
@@ -100,6 +113,9 @@ var migrations = []string{
 		expires_at INTEGER NOT NULL
 	);
 	CREATE INDEX sessions_by_expiry ON sessions (expires_at);`,
+	`ALTER TABLE sessions ADD COLUMN subject TEXT NOT NULL DEFAULT '';
+	ALTER TABLE audit ADD COLUMN subject TEXT NOT NULL DEFAULT '';
+	CREATE INDEX audit_by_target ON audit (target, id);`,
 }
 
 // SQLite is the single-replica Store.
@@ -222,31 +238,61 @@ func (s *SQLite) PruneStops(ctx context.Context, before time.Time) (int, error) 
 	return int(n), nil
 }
 
-func (s *SQLite) AppendAudit(ctx context.Context, e AuditEntry) error {
+// AppendAudit stores an entry and returns its id.
+func (s *SQLite) AppendAudit(ctx context.Context, e AuditEntry) (int64, error) {
 	if e.User == "" || e.Action == "" || e.Result == "" {
-		return errors.New("store: audit entry needs user, action and result")
+		return 0, errors.New("store: audit entry needs user, action and result")
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO audit (at, user, target, scope, service, action, params, result, error)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, e.Time.UnixMilli(), e.User, e.Service.Target, e.Service.Scope, e.Service.Name,
-		e.Action, e.Params, e.Result, e.Error)
-	return err
+	res, err := s.db.ExecContext(ctx, `INSERT INTO audit (at, user, subject, target, scope, service, action, params, result, error)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, e.Time.UnixMilli(), e.User, e.Subject, e.Service.Target, e.Service.Scope,
+		e.Service.Name, e.Action, e.Params, e.Result, e.Error)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// FinishAudit records the outcome of an entry appended as pending.
+func (s *SQLite) FinishAudit(ctx context.Context, id int64, result, errText string) error {
+	res, err := s.db.ExecContext(ctx, "UPDATE audit SET result = ?, error = ? WHERE id = ? AND result = ?",
+		result, errText, id, ResultPending)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("store: audit entry %d: %w", id, ErrNotFound)
+	}
+	return nil
 }
 
 // Audit returns the newest entries first.
-func (s *SQLite) Audit(ctx context.Context, limit int) ([]AuditEntry, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, at, user, target, scope, service, action, params, result, error
-		FROM audit ORDER BY id DESC LIMIT ?`, limit)
+func (s *SQLite) Audit(ctx context.Context, q AuditQuery) ([]AuditEntry, error) {
+	out := []AuditEntry{}
+	if len(q.Targets) == 0 || q.Limit < 1 {
+		return out, nil
+	}
+	args := make([]any, 0, len(q.Targets)+2)
+	for _, t := range q.Targets {
+		args = append(args, t)
+	}
+	query := `SELECT id, at, user, subject, target, scope, service, action, params, result, error FROM audit
+		WHERE target IN (?` + strings.Repeat(", ?", len(q.Targets)-1) + ")"
+	if q.Before > 0 {
+		query += " AND id < ?"
+		args = append(args, q.Before)
+	}
+	args = append(args, q.Limit)
+	rows, err := s.db.QueryContext(ctx, query+" ORDER BY id DESC LIMIT ?", args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []AuditEntry{}
 	for rows.Next() {
 		var (
 			e  AuditEntry
 			at int64
 		)
-		if err := rows.Scan(&e.ID, &at, &e.User, &e.Service.Target, &e.Service.Scope, &e.Service.Name,
+		if err := rows.Scan(&e.ID, &at, &e.User, &e.Subject, &e.Service.Target, &e.Service.Scope, &e.Service.Name,
 			&e.Action, &e.Params, &e.Result, &e.Error); err != nil {
 			return nil, err
 		}
@@ -268,8 +314,8 @@ func (s *SQLite) CreateSession(ctx context.Context, sess Session) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO sessions (id, user, groups, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`,
-		sess.ID, sess.User, string(b), sess.CreatedAt.UnixMilli(), sess.ExpiresAt.UnixMilli())
+	_, err = s.db.ExecContext(ctx, `INSERT INTO sessions (id, user, subject, groups, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		sess.ID, sess.User, sess.Subject, string(b), sess.CreatedAt.UnixMilli(), sess.ExpiresAt.UnixMilli())
 	return err
 }
 
@@ -280,8 +326,8 @@ func (s *SQLite) Session(ctx context.Context, id string, now time.Time) (Session
 		groups           string
 		created, expires int64
 	)
-	err := s.db.QueryRowContext(ctx, `SELECT id, user, groups, created_at, expires_at FROM sessions WHERE id = ? AND expires_at > ?`,
-		id, now.UnixMilli()).Scan(&sess.ID, &sess.User, &groups, &created, &expires)
+	err := s.db.QueryRowContext(ctx, `SELECT id, user, subject, groups, created_at, expires_at FROM sessions WHERE id = ? AND expires_at > ?`,
+		id, now.UnixMilli()).Scan(&sess.ID, &sess.User, &sess.Subject, &groups, &created, &expires)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Session{}, ErrNotFound
 	}

@@ -46,8 +46,11 @@ var ErrUnauthenticated = errors.New("authentication required")
 
 // Principal is the caller of a request.
 type Principal struct {
-	User   string
-	Groups []string
+	User string
+	// Subject is the OIDC sub claim, which survives a rename of User. It is
+	// empty in the other modes.
+	Subject string
+	Groups  []string
 }
 
 // Sessions is the persistence oidc mode needs.
@@ -133,7 +136,7 @@ func (s *Service) Authenticate(r *http.Request) (Principal, error) {
 		if err != nil {
 			return Principal{}, fmt.Errorf("read session: %w", err)
 		}
-		return Principal{User: sess.User, Groups: sess.Groups}, nil
+		return Principal{User: sess.User, Subject: sess.Subject, Groups: sess.Groups}, nil
 	default:
 		// A DNS-rebound page reaches loopback under its own host name, so its
 		// Origin and Host agree; only a loopback Host proves a local caller.

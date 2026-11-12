@@ -1,7 +1,7 @@
 // Package config loads the fleetbox configuration file.
 //
-// Unknown keys are errors everywhere: a misspelled readonly must not silently
-// leave a production target writable. Provider-specific settings live under a
+// Unknown keys are errors everywhere: a misspelled key must not be silently
+// ignored. Provider-specific settings live under a
 // key named after the provider and are decoded by the provider itself through
 // DecodeStrict, so adding a provider never touches this package.
 package config
@@ -94,6 +94,8 @@ type Target struct {
 	Name     string
 	Provider string
 	Env      string
+	// Readonly refuses every operation on the target. It defaults to true:
+	// Docker API access is root on the host, so operating is an opt-in.
 	Readonly bool
 	Interval time.Duration
 	Spec     yaml.Node
@@ -125,7 +127,7 @@ func (t *Target) UnmarshalYAML(node *yaml.Node) error {
 			extra = append(extra, k, v)
 		}
 	}
-	var c targetCommon
+	c := targetCommon{Readonly: true}
 	if err := DecodeStrict(common, &c); err != nil {
 		return err
 	}

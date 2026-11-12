@@ -25,7 +25,7 @@ targets:
   - name: prod-aws
     provider: ecs
     env: prod
-    readonly: true
+    # Targets are read-only unless they say otherwise.
     ecs:
       region: ap-northeast-2
       readRoleArn: arn:aws:iam::123456789012:role/fleetbox-read
@@ -33,9 +33,12 @@ targets:
     provider: ecs
     env: dev
     interval: 1m
+    readonly: false
     ecs:
       region: ap-northeast-2
       readRoleArn: arn:aws:iam::210987654321:role/fleetbox-read
+      # Assumed only for restart and scale; without it the target cannot be operated.
+      operateRoleArn: arn:aws:iam::210987654321:role/fleetbox-operate
       clusters: [web, batch]
   - name: build-host-1
     provider: docker

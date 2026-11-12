@@ -114,6 +114,71 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/services/{target}/{scope}/{service}/restart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                target: components["parameters"]["TargetName"];
+                scope: components["parameters"]["ScopeName"];
+                service: components["parameters"]["ServiceName"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restart every instance of a service
+         * @description Answers with the service read fresh afterwards, or from the cache when that read fails.
+         */
+        post: operations["restartService"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/services/{target}/{scope}/{service}/scale": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                target: components["parameters"]["TargetName"];
+                scope: components["parameters"]["ScopeName"];
+                service: components["parameters"]["ServiceName"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set the desired instance count of a service
+         * @description Answers with the service read fresh afterwards, or from the cache when that read fails.
+         */
+        post: operations["scaleService"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Operation requests, newest first, on the targets the caller holds a role on */
+        get: operations["listAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/services/{target}/{scope}/{service}/events": {
         parameters: {
             query?: never;
@@ -170,6 +235,38 @@ export interface components {
                 code: "bad_request" | "unauthorized" | "forbidden" | "not_found" | "unsupported" | "unreachable" | "timeout" | "internal";
                 message: string;
             };
+        };
+        ScaleRequest: {
+            desired: number;
+        };
+        AuditEntry: {
+            /** Format: int64 */
+            id: number;
+            /** Format: date-time */
+            time: string;
+            user: string;
+            /** @description The OIDC subject, stable across user renames; absent in other modes */
+            subject?: string;
+            service: components["schemas"]["ServiceRef"];
+            /** @enum {string} */
+            action: "restart" | "scale";
+            /** @description The operation's parameters as JSON, for example {"desired":3} */
+            params?: string;
+            /**
+             * @description pending: allowed and started, outcome not recorded (the server stopped or the write failed); denied: refused before reaching the provider; error: the provider failed.
+             * @enum {string}
+             */
+            result: "pending" | "ok" | "denied" | "error";
+            /** @description The error code and the message the caller received */
+            error?: string;
+        };
+        AuditPage: {
+            entries: components["schemas"]["AuditEntry"][];
+            /**
+             * Format: int64
+             * @description Pass as before to read the next page; absent once a page comes back short of limit
+             */
+            next?: number;
         };
         Info: {
             version: string;
@@ -622,6 +719,245 @@ export interface operations {
             };
             /** @description Error */
             504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    restartService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                target: components["parameters"]["TargetName"];
+                scope: components["parameters"]["ScopeName"];
+                service: components["parameters"]["ServiceName"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Service detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceDetail"];
+                };
+            };
+            /** @description Error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Error */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Error */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Error */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    scaleService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                target: components["parameters"]["TargetName"];
+                scope: components["parameters"]["ScopeName"];
+                service: components["parameters"]["ServiceName"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScaleRequest"];
+            };
+        };
+        responses: {
+            /** @description Service detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceDetail"];
+                };
+            };
+            /** @description Error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Error */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Error */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Error */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listAudit: {
+        parameters: {
+            query?: {
+                target?: string;
+                limit?: number;
+                /** @description Return entries older than this id; the previous page's next */
+                before?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of the audit log */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditPage"];
+                };
+            };
+            /** @description Error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

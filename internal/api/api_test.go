@@ -46,11 +46,37 @@ type fakeProvider struct {
 	evErr   error
 	logs    provider.LogStream
 	logsErr error
+	ops     bool // advertise restart and scale
+	opCalls []string
+	opErr   error
+	onOp    func()
 }
 
 func (f *fakeProvider) Kind() string { return "ecs" }
 func (f *fakeProvider) Capabilities() provider.Capabilities {
-	return provider.Capabilities{Logs: true, FollowLogs: true, Events: true}
+	return provider.Capabilities{Logs: true, FollowLogs: true, Events: true, Restart: f.ops, Scale: f.ops}
+}
+func (f *fakeProvider) Restart(ctx context.Context, ref model.ServiceRef) error {
+	return f.operate(ctx, "restart "+ref.String())
+}
+func (f *fakeProvider) Scale(ctx context.Context, ref model.ServiceRef, desired int) error {
+	return f.operate(ctx, fmt.Sprintf("scale %s %d", ref, desired))
+}
+
+// operate fails like a real SDK call when the context is gone by the time the
+// request would leave.
+func (f *fakeProvider) operate(ctx context.Context, call string) error {
+	f.mu.Lock()
+	f.opCalls = append(f.opCalls, call)
+	hook, err := f.onOp, f.opErr
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return err
 }
 func (f *fakeProvider) Inventory(context.Context) (model.Inventory, error) { return f.inv, nil }
 func (f *fakeProvider) Service(_ context.Context, ref model.ServiceRef) (model.ServiceDetail, error) {
@@ -104,7 +130,14 @@ type harness struct {
 	h      http.Handler
 	fp     *fakeProvider
 	stops  *fakeStops
+	audit  *store.SQLite
 	router routers.Router
+}
+
+// target describes the harness's one target, "prod".
+type target struct {
+	readonly bool
+	ops      bool
 }
 
 // newHarness serves the API without authentication, as on loopback.
@@ -134,10 +167,30 @@ func newHarnessWith(t *testing.T, a config.Auth) *harness {
 
 func newHarnessAuth(t *testing.T, authn *auth.Service) *harness {
 	t.Helper()
-	fp := &fakeProvider{inv: fixture()}
+	return newHarnessTarget(t, authn, target{readonly: true})
+}
+
+// newOpsHarness serves a target that can be operated.
+func newOpsHarness(t *testing.T, a config.Auth) *harness {
+	t.Helper()
+	authn, err := auth.New(&config.Config{Auth: a}, nil, discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newHarnessTarget(t, authn, target{ops: true})
+}
+
+func newHarnessTarget(t *testing.T, authn *auth.Service, tg target) *harness {
+	t.Helper()
+	fp := &fakeProvider{inv: fixture(), ops: tg.ops}
 	fp.detail = model.ServiceDetail{Service: fp.inv.Services[0], Instances: fp.inv.Instances}
 	stops := &fakeStops{}
-	targets := []inventory.Target{{Config: config.Target{Name: "prod", Env: "prod", Readonly: true, Interval: time.Minute}, Provider: fp}}
+	audit, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { audit.Close() })
+	targets := []inventory.Target{{Config: config.Target{Name: "prod", Env: "prod", Readonly: tg.readonly, Interval: time.Minute}, Provider: fp}}
 	cache := inventory.NewCache()
 	poller := inventory.NewPoller(targets, cache, stops, discard)
 	if err := poller.Refresh(context.Background(), "prod"); err != nil {
@@ -154,7 +207,7 @@ func newHarnessAuth(t *testing.T, authn *auth.Service) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &harness{h: NewHandler(c, authn, discard), fp: fp, stops: stops, router: router}
+	return &harness{h: NewHandler(c, authn, audit, discard), fp: fp, stops: stops, audit: audit, router: router}
 }
 
 // do sends a request as a browser on the console would, CSRF header and
@@ -174,9 +227,18 @@ func (h *harness) do(t *testing.T, method, target string) *httptest.ResponseReco
 // operation documents.
 func (h *harness) doWith(t *testing.T, method, target string, hdr http.Header) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(method, "http://127.0.0.1:8080"+target, nil)
+	return h.send(t, method, target, hdr, "")
+}
+
+// send is doWith with a JSON request body.
+func (h *harness) send(t *testing.T, method, target string, hdr http.Header, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, "http://127.0.0.1:8080"+target, strings.NewReader(body))
 	for k, v := range hdr {
 		req.Header[k] = v
+	}
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	rec := httptest.NewRecorder()
 	h.h.ServeHTTP(rec, req)
@@ -375,7 +437,8 @@ func TestAuthRequired(t *testing.T) {
 		{"GET", "/api/v1/info"}, {"GET", "/api/v1/me"}, {"GET", "/api/v1/targets"}, {"GET", "/api/v1/services"},
 		{"GET", "/api/v1/services/prod/web/api"}, {"POST", "/api/v1/services/prod/web/api/refresh"},
 		{"GET", "/api/v1/services/prod/web/api/events"}, {"GET", "/api/v1/services/prod/web/api/instances/t1/logs"},
-		{"GET", "/api/v1/nope"},
+		{"POST", "/api/v1/services/prod/web/api/restart"}, {"POST", "/api/v1/services/prod/web/api/scale"},
+		{"GET", "/api/v1/audit"}, {"GET", "/api/v1/nope"},
 	} {
 		wantError(t, h.do(t, tt.method, tt.path), http.StatusUnauthorized, ErrorErrorCodeUnauthorized)
 	}
@@ -401,6 +464,11 @@ func TestHiddenTargets(t *testing.T) {
 	post.Set(auth.CSRFHeader, "1")
 	post.Set("Origin", "http://127.0.0.1:8080")
 	wantError(t, h.doWith(t, "POST", "/api/v1/services/prod/web/api/refresh", post), http.StatusNotFound, ErrorErrorCodeNotFound)
+	wantError(t, h.doWith(t, "POST", "/api/v1/services/prod/web/api/restart", post), http.StatusNotFound, ErrorErrorCodeNotFound)
+	wantError(t, h.send(t, "POST", "/api/v1/services/prod/web/api/scale", post, `{"desired":1}`), http.StatusNotFound, ErrorErrorCodeNotFound)
+	if got := decode[AuditPage](t, h.doWith(t, "GET", "/api/v1/audit", stranger)); len(got.Entries) != 0 {
+		t.Fatalf("audit = %+v", got)
+	}
 	wantError(t, h.doWith(t, "GET", "/api/v1/services/prod/web/api/events", stranger), http.StatusNotFound, ErrorErrorCodeNotFound)
 	wantError(t, h.doWith(t, "GET", "/api/v1/services/prod/web/api/instances/t1/logs", stranger), http.StatusNotFound, ErrorErrorCodeNotFound)
 
@@ -422,6 +490,7 @@ func TestCSRF(t *testing.T) {
 	if rec := h.do(t, "POST", path); rec.Code != http.StatusOK {
 		t.Fatalf("same-origin refresh = %d: %s", rec.Code, rec.Body)
 	}
+	wantError(t, h.doWith(t, "POST", "/api/v1/services/prod/web/api/restart", nil), http.StatusForbidden, ErrorErrorCodeForbidden)
 }
 
 func TestSessionStoreFailure(t *testing.T) {

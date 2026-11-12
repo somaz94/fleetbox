@@ -13,19 +13,44 @@ import (
 	"time"
 
 	"github.com/somaz94/fleetbox/internal/auth"
+	"github.com/somaz94/fleetbox/internal/config"
 	"github.com/somaz94/fleetbox/internal/core"
 	"github.com/somaz94/fleetbox/internal/inventory"
 	"github.com/somaz94/fleetbox/internal/model"
 	"github.com/somaz94/fleetbox/internal/provider"
+	"github.com/somaz94/fleetbox/internal/store"
 )
 
-const basePath = "/api/v1"
+const (
+	basePath     = "/api/v1"
+	maxDesired   = 1000
+	defaultAudit = 100
+	maxAudit     = 500
+
+	// An operation outlives a caller who hangs up, since the provider may
+	// already have applied it, but not forever.
+	operationTimeout = 2 * time.Minute
+	auditTimeout     = 5 * time.Second
+)
+
+// forbidden refuses an operation the caller's role or the target does not allow.
+type forbidden string
+
+func (f forbidden) Error() string { return string(f) }
+
+// AuditLog is the part of the store operations are recorded in.
+type AuditLog interface {
+	AppendAudit(ctx context.Context, e store.AuditEntry) (int64, error)
+	FinishAudit(ctx context.Context, id int64, result, errText string) error
+	Audit(ctx context.Context, q store.AuditQuery) ([]store.AuditEntry, error)
+}
 
 // Server implements StrictServerInterface.
 type Server struct {
-	core *core.Core
-	auth *auth.Service
-	log  *slog.Logger
+	core  *core.Core
+	auth  *auth.Service
+	audit AuditLog
+	log   *slog.Logger
 }
 
 var _ StrictServerInterface = (*Server)(nil)
@@ -33,8 +58,8 @@ var _ StrictServerInterface = (*Server)(nil)
 // NewHandler returns the /api/v1 handler. Errors of every kind, including
 // unknown routes, malformed parameters and a missing identity, answer with the
 // Error schema.
-func NewHandler(c *core.Core, a *auth.Service, log *slog.Logger) http.Handler {
-	s := &Server{core: c, auth: a, log: log}
+func NewHandler(c *core.Core, a *auth.Service, audit AuditLog, log *slog.Logger) http.Handler {
+	s := &Server{core: c, auth: a, audit: audit, log: log}
 	mux := http.NewServeMux()
 	badRequest := func(w http.ResponseWriter, _ *http.Request, err error) {
 		writeError(w, http.StatusBadRequest, ErrorErrorCodeBadRequest, err.Error())
@@ -212,10 +237,198 @@ func (s *Server) ListServiceEvents(ctx context.Context, req ListServiceEventsReq
 	return out, nil
 }
 
+// operation is one audited request.
+type operation struct {
+	action  string
+	params  string
+	allowed func(provider.Capabilities) bool
+	run     func(ctx context.Context) error
+}
+
+// operate checks an operation request and runs it. A hidden target is refused
+// before anything else so it answers exactly like a missing one. Every request
+// on a configured target is audited, and the entry is written before the
+// provider is called: an operation that cannot be audited is not performed.
+func (s *Server) operate(ctx context.Context, ref model.ServiceRef, op operation) (core.DetailView, error) {
+	t, ok := s.core.Target(ref.Target)
+	if !ok {
+		return core.DetailView{}, fmt.Errorf("target %q: %w", ref.Target, provider.ErrNotFound)
+	}
+	p, _ := auth.FromContext(ctx)
+	entry := store.AuditEntry{Time: time.Now(), User: p.User, Subject: p.Subject, Service: ref, Action: op.action, Params: op.params}
+	var refusal error
+	switch role := s.auth.Role(p, ref.Target); {
+	case role == "":
+		refusal = fmt.Errorf("target %q: %w", ref.Target, provider.ErrNotFound)
+	case role != config.RoleOperator:
+		refusal = forbidden(fmt.Sprintf("%s needs the operator role on target %q", op.action, ref.Target))
+	case t.Readonly:
+		refusal = forbidden(fmt.Sprintf("target %q is read-only", ref.Target))
+	case !op.allowed(t.Capabilities):
+		refusal = fmt.Errorf("the %s provider cannot %s: %w", t.Provider, op.action, provider.ErrUnsupported)
+	}
+	if refusal != nil {
+		entry.Result, entry.Error = store.ResultDenied, auditText(refusal)
+		if _, err := s.audit.AppendAudit(ctx, entry); err != nil {
+			s.log.Error("audit a refused operation", "service", ref.String(), "action", op.action, "err", err)
+		}
+		return core.DetailView{}, refusal
+	}
+
+	prior, priorErr := s.core.Service(ctx, ref)
+	entry.Result = store.ResultPending
+	id, err := s.audit.AppendAudit(ctx, entry)
+	if err != nil {
+		return core.DetailView{}, fmt.Errorf("audit before %s: %w", op.action, err)
+	}
+	runCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), operationTimeout)
+	runErr := op.run(runCtx)
+	cancel()
+	result, text := store.ResultOK, ""
+	if runErr != nil {
+		result, text = store.ResultError, auditText(runErr)
+	}
+	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), auditTimeout)
+	if err := s.audit.FinishAudit(auditCtx, id, result, text); err != nil {
+		s.log.Error("audit the outcome of an operation", "id", id, "result", result, "err", err)
+	}
+	cancel()
+	if runErr != nil {
+		return core.DetailView{}, runErr
+	}
+	// The operation went through, so it never answers as a failure: a failed
+	// read falls back to the cache, then to the service as it was before.
+	d, err := s.core.Refresh(ctx, ref)
+	if err == nil {
+		return d, nil
+	}
+	s.log.Warn("read after operation", "service", ref.String(), "err", err)
+	if d, err := s.core.Service(ctx, ref); err == nil {
+		return d, nil
+	}
+	if priorErr != nil {
+		return core.DetailView{}, priorErr
+	}
+	return prior, nil
+}
+
+// auditText is what the audit log keeps of an error: its code and the message
+// a caller would see, never an internal error's text.
+func auditText(err error) string {
+	e, _ := errorFor(err)
+	return string(e.Error.Code) + ": " + e.Error.Message
+}
+
+func (s *Server) RestartService(ctx context.Context, req RestartServiceRequestObject) (RestartServiceResponseObject, error) {
+	ref := model.ServiceRef{Target: req.Target, Scope: req.Scope, Name: req.Service}
+	d, err := s.operate(ctx, ref, operation{
+		action:  "restart",
+		allowed: func(c provider.Capabilities) bool { return c.Restart },
+		run:     func(ctx context.Context) error { return s.core.Restart(ctx, ref) },
+	})
+	if err != nil {
+		e, status := s.classify(err)
+		switch status {
+		case http.StatusForbidden:
+			return RestartService403JSONResponse(e), nil
+		case http.StatusNotFound:
+			return RestartService404JSONResponse(e), nil
+		case http.StatusNotImplemented:
+			return RestartService501JSONResponse(e), nil
+		case http.StatusBadGateway:
+			return RestartService502JSONResponse(e), nil
+		case http.StatusGatewayTimeout:
+			return RestartService504JSONResponse(e), nil
+		}
+		return RestartService500JSONResponse(e), nil
+	}
+	return RestartService200JSONResponse(toDetail(d)), nil
+}
+
+func (s *Server) ScaleService(ctx context.Context, req ScaleServiceRequestObject) (ScaleServiceResponseObject, error) {
+	if req.Body == nil || req.Body.Desired < 0 || req.Body.Desired > maxDesired {
+		return ScaleService400JSONResponse(errorBody(ErrorErrorCodeBadRequest, fmt.Sprintf("desired must be between 0 and %d", maxDesired))), nil
+	}
+	ref := model.ServiceRef{Target: req.Target, Scope: req.Scope, Name: req.Service}
+	desired := req.Body.Desired
+	d, err := s.operate(ctx, ref, operation{
+		action:  "scale",
+		params:  fmt.Sprintf(`{"desired":%d}`, desired),
+		allowed: func(c provider.Capabilities) bool { return c.Scale },
+		run:     func(ctx context.Context) error { return s.core.Scale(ctx, ref, desired) },
+	})
+	if err != nil {
+		e, status := s.classify(err)
+		switch status {
+		case http.StatusForbidden:
+			return ScaleService403JSONResponse(e), nil
+		case http.StatusNotFound:
+			return ScaleService404JSONResponse(e), nil
+		case http.StatusNotImplemented:
+			return ScaleService501JSONResponse(e), nil
+		case http.StatusBadGateway:
+			return ScaleService502JSONResponse(e), nil
+		case http.StatusGatewayTimeout:
+			return ScaleService504JSONResponse(e), nil
+		}
+		return ScaleService500JSONResponse(e), nil
+	}
+	return ScaleService200JSONResponse(toDetail(d)), nil
+}
+
+func (s *Server) ListAudit(ctx context.Context, req ListAuditRequestObject) (ListAuditResponseObject, error) {
+	q := store.AuditQuery{Limit: defaultAudit}
+	if l := req.Params.Limit; l != nil {
+		if *l < 1 || *l > maxAudit {
+			return ListAudit400JSONResponse(errorBody(ErrorErrorCodeBadRequest, fmt.Sprintf("limit must be between 1 and %d", maxAudit))), nil
+		}
+		q.Limit = *l
+	}
+	if b := req.Params.Before; b != nil {
+		if *b < 1 {
+			return ListAudit400JSONResponse(errorBody(ErrorErrorCodeBadRequest, "before must be positive")), nil
+		}
+		q.Before = *b
+	}
+	for _, t := range s.core.Targets() {
+		if (req.Params.Target == nil || *req.Params.Target == t.Name) && s.visible(ctx, t.Name) {
+			q.Targets = append(q.Targets, t.Name)
+		}
+	}
+	entries, err := s.audit.Audit(ctx, q)
+	if err != nil {
+		e, _ := s.classify(err)
+		return ListAudit500JSONResponse(e), nil
+	}
+	out := ListAudit200JSONResponse{Entries: []AuditEntry{}}
+	for _, e := range entries {
+		out.Entries = append(out.Entries, AuditEntry{
+			Id: e.ID, Time: e.Time, User: e.User, Subject: ptr(e.Subject),
+			Service: ServiceRef{Target: e.Service.Target, Scope: e.Service.Scope, Name: e.Service.Name},
+			Action:  AuditEntryAction(e.Action), Params: ptr(e.Params), Result: AuditEntryResult(e.Result), Error: ptr(e.Error),
+		})
+	}
+	if len(entries) == q.Limit {
+		out.Next = &entries[len(entries)-1].ID
+	}
+	return out, nil
+}
+
 // classify maps an error to its wire code and status. Internal errors are
 // logged and answered without their text.
 func (s *Server) classify(err error) (Error, int) {
+	e, status := errorFor(err)
+	if status == http.StatusInternalServerError {
+		s.log.Error("api request failed", "err", err)
+	}
+	return e, status
+}
+
+func errorFor(err error) (Error, int) {
+	var f forbidden
 	switch {
+	case errors.As(err, &f):
+		return errorBody(ErrorErrorCodeForbidden, err.Error()), http.StatusForbidden
 	case errors.Is(err, provider.ErrNotFound):
 		return errorBody(ErrorErrorCodeNotFound, err.Error()), http.StatusNotFound
 	case errors.Is(err, provider.ErrUnsupported):
@@ -225,7 +438,6 @@ func (s *Server) classify(err error) (Error, int) {
 	case errors.Is(err, context.DeadlineExceeded):
 		return errorBody(ErrorErrorCodeTimeout, "the provider did not answer in time"), http.StatusGatewayTimeout
 	default:
-		s.log.Error("api request failed", "err", err)
 		return errorBody(ErrorErrorCodeInternal, "internal error"), http.StatusInternalServerError
 	}
 }

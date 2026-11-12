@@ -25,12 +25,12 @@ targets:
   - name: prod-aws
     provider: ecs
     env: prod
-    readonly: true
     ecs:
       region: ap-northeast-2
   - name: build-host-1
     provider: docker
     interval: 1m
+    readonly: false
     docker:
       host: 192.0.2.10
 `
@@ -56,8 +56,8 @@ func TestParseValid(t *testing.T) {
 	if err := DecodeStrict(&prod.Spec, &spec); err != nil || spec.Region != "ap-northeast-2" {
 		t.Fatalf("spec = %+v, err %v", spec, err)
 	}
-	if c.Targets[1].Interval != time.Minute {
-		t.Fatalf("interval = %s", c.Targets[1].Interval)
+	if c.Targets[1].Interval != time.Minute || c.Targets[1].Readonly {
+		t.Fatalf("second target = %+v", c.Targets[1])
 	}
 	o := c.Auth.OIDC
 	if o.GroupsClaim != DefaultGroupsClaim || o.SessionTTL != DefaultSessionTTL || len(o.Scopes) != len(DefaultScopes) {

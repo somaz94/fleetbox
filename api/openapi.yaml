@@ -13,6 +13,13 @@ info:
     is granted on; any other target answers as if it did not exist. A POST
     must carry the X-Fleetbox-CSRF header and an Origin equal to the
     server's, or it answers 403.
+
+
+    An operation (restart, scale) also answers 403 when the caller is not an
+    operator on the target or the target is read-only, and 501 when the
+    provider cannot perform it. Every operation request on a configured target
+    is written to the audit log, allowed or refused; one that cannot be
+    written is not performed.
   version: v1
   license:
     name: Apache-2.0
@@ -24,6 +31,8 @@ tags:
   - name: system
   - name: targets
   - name: services
+  - name: operations
+  - name: audit
 paths:
   /info:
     get:
@@ -129,6 +138,83 @@ paths:
         "500": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "502": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "504": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /services/{target}/{scope}/{service}/restart:
+    parameters:
+      - $ref: "#/components/parameters/TargetName"
+      - $ref: "#/components/parameters/ScopeName"
+      - $ref: "#/components/parameters/ServiceName"
+    post:
+      operationId: restartService
+      tags: [operations]
+      summary: Restart every instance of a service
+      description: >
+        Answers with the service read fresh afterwards, or from the cache when
+        that read fails.
+      responses:
+        "200":
+          description: Service detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServiceDetail" }
+        "401": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "500": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "501": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "502": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "504": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /services/{target}/{scope}/{service}/scale:
+    parameters:
+      - $ref: "#/components/parameters/TargetName"
+      - $ref: "#/components/parameters/ScopeName"
+      - $ref: "#/components/parameters/ServiceName"
+    post:
+      operationId: scaleService
+      tags: [operations]
+      summary: Set the desired instance count of a service
+      description: >
+        Answers with the service read fresh afterwards, or from the cache when
+        that read fails.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ScaleRequest" }
+      responses:
+        "200":
+          description: Service detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServiceDetail" }
+        "400": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "500": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "501": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "502": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "504": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /audit:
+    get:
+      operationId: listAudit
+      tags: [audit]
+      summary: Operation requests, newest first, on the targets the caller holds a role on
+      parameters:
+        - { name: target, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - name: before
+          in: query
+          description: Return entries older than this id; the previous page's next
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        "200":
+          description: One page of the audit log
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditPage" }
+        "400": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "500": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /services/{target}/{scope}/{service}/events:
     parameters:
       - $ref: "#/components/parameters/TargetName"
@@ -223,6 +309,47 @@ components:
               type: string
               enum: [bad_request, unauthorized, forbidden, not_found, unsupported, unreachable, timeout, internal]
             message: { type: string }
+    ScaleRequest:
+      type: object
+      required: [desired]
+      properties:
+        desired: { type: integer, minimum: 0, maximum: 1000 }
+    AuditEntry:
+      type: object
+      required: [id, time, user, service, action, result]
+      properties:
+        id: { type: integer, format: int64 }
+        time: { type: string, format: date-time }
+        user: { type: string }
+        subject:
+          type: string
+          description: The OIDC subject, stable across user renames; absent in other modes
+        service: { $ref: "#/components/schemas/ServiceRef" }
+        action: { type: string, enum: [restart, scale] }
+        params:
+          type: string
+          description: The operation's parameters as JSON, for example {"desired":3}
+        result:
+          type: string
+          description: >
+            pending: allowed and started, outcome not recorded (the server
+            stopped or the write failed); denied: refused before reaching the
+            provider; error: the provider failed.
+          enum: [pending, ok, denied, error]
+        error:
+          type: string
+          description: The error code and the message the caller received
+    AuditPage:
+      type: object
+      required: [entries]
+      properties:
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/AuditEntry" }
+        next:
+          type: integer
+          format: int64
+          description: Pass as before to read the next page; absent once a page comes back short of limit
     Info:
       type: object
       required: [version, commit, buildDate]

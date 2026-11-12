@@ -144,6 +144,40 @@ func (c *Core) detail(ctx context.Context, d model.ServiceDetail, stale bool) (D
 	return DetailView{Service: view(d.Service, d.Instances, stale), Instances: d.Instances, Stops: stops}, nil
 }
 
+// Target returns a configured target's cached state.
+func (c *Core) Target(name string) (inventory.TargetState, bool) { return c.cache.Target(name) }
+
+// Restart restarts a service through its provider. Authorisation is the
+// caller's job; core only refuses a provider without operations.
+func (c *Core) Restart(ctx context.Context, ref model.ServiceRef) error {
+	op, err := c.operator(ref.Target)
+	if err != nil {
+		return err
+	}
+	return op.Restart(ctx, ref)
+}
+
+// Scale sets a service's desired instance count through its provider.
+func (c *Core) Scale(ctx context.Context, ref model.ServiceRef, desired int) error {
+	op, err := c.operator(ref.Target)
+	if err != nil {
+		return err
+	}
+	return op.Scale(ctx, ref, desired)
+}
+
+func (c *Core) operator(target string) (provider.Operator, error) {
+	p, err := c.provider(target)
+	if err != nil {
+		return nil, err
+	}
+	op, ok := p.(provider.Operator)
+	if !ok {
+		return nil, fmt.Errorf("target %q has no operations: %w", target, provider.ErrUnsupported)
+	}
+	return op, nil
+}
+
 // Events reads a service's timeline from its provider.
 func (c *Core) Events(ctx context.Context, ref model.ServiceRef, since time.Time) ([]model.Event, error) {
 	p, err := c.provider(ref.Target)
