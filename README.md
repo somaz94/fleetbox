@@ -45,11 +45,17 @@ Portainer and its peers manage Docker hosts but not ECS; e1s and the AWS console
 
 A target is read-only unless its configuration says `readonly: false`. An ECS target also needs `operateRoleArn`, a role allowed `ecs:UpdateService` that trusts the server's base identity rather than the read role, before it can be restarted or scaled; Docker targets can be restarted but not scaled. Only users holding the `operator` role on a target see its operations, and every request is recorded in the audit log.
 
+A Docker target signs in over SSH as a user who can reach the Docker socket, with the host key pinned in `known_hosts`. Where a non-interactive session does not find the `docker` CLI, as on some NAS appliances, `dockerPath` names it.
+
 Findings (image drift across environments, stuck deployments, failed stops and image hygiene) are evaluated on an interval and need no configuration; the optional `findings` block tunes their thresholds. Slack routes under `notify.slack` announce findings as they open and resolve, each reading its incoming webhook URL from a file. A finding is shown, and sent to a route, only when every target it involves is covered.
 
 <br/>
 
 ## Upgrading
+
+### From v0.4
+
+- No schema migration and no configuration change. The API only adds fields (a service's `stoppedSince`, a target's `endpoint`, instance details), so existing clients of `/api/v1` keep working.
 
 ### From v0.3
 
