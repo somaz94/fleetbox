@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"regexp"
 	"strconv"
 	"sync"
 	"time"
@@ -16,17 +17,23 @@ import (
 )
 
 const (
-	dialStdioCommand = "docker system dial-stdio"
-	sshTimeout       = 15 * time.Second
+	defaultDockerPath = "docker"
+	dialStdioArgs     = " system dial-stdio"
+	sshTimeout        = 15 * time.Second
 )
+
+// The remote shell parses the command, so a configured path is limited to
+// characters that need no quoting.
+var dockerPathPattern = regexp.MustCompile(`^/[A-Za-z0-9._/-]+$`)
 
 // sshTransport reaches dockerd by running `docker system dial-stdio` over SSH,
 // one session per HTTP connection on a shared client. It uses
 // golang.org/x/crypto/ssh rather than an ssh binary, which the distroless
 // image does not have, and refuses a host whose key is not pinned.
 type sshTransport struct {
-	addr   string
-	config *ssh.ClientConfig
+	addr    string
+	command string
+	config  *ssh.ClientConfig
 
 	mu     sync.Mutex
 	client *ssh.Client
@@ -35,6 +42,12 @@ type sshTransport struct {
 func newSSHTransport(c Config) (*sshTransport, error) {
 	if c.Host == "" || c.User == "" || c.KeyFile == "" || c.KnownHostsFile == "" {
 		return nil, errors.New("ssh transport needs host, user, keyFile and knownHostsFile")
+	}
+	dockerPath := c.DockerPath
+	if dockerPath == "" {
+		dockerPath = defaultDockerPath
+	} else if !dockerPathPattern.MatchString(dockerPath) {
+		return nil, fmt.Errorf("dockerPath %q must be an absolute path of letters, digits and ._/-", dockerPath)
 	}
 	key, err := os.ReadFile(c.KeyFile)
 	if err != nil {
@@ -53,7 +66,8 @@ func newSSHTransport(c Config) (*sshTransport, error) {
 		port = 22
 	}
 	return &sshTransport{
-		addr: net.JoinHostPort(c.Host, strconv.Itoa(port)),
+		addr:    net.JoinHostPort(c.Host, strconv.Itoa(port)),
+		command: dockerPath + dialStdioArgs,
 		config: &ssh.ClientConfig{
 			User:            c.User,
 			Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
@@ -68,14 +82,14 @@ func (t *sshTransport) DialContext(ctx context.Context) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	conn, err := openDialStdio(client)
+	conn, err := openDialStdio(client, t.command)
 	if err != nil {
 		// The shared connection may have died; reconnect once.
 		t.drop(client)
 		if client, err = t.connect(ctx); err != nil {
 			return nil, err
 		}
-		return openDialStdio(client)
+		return openDialStdio(client, t.command)
 	}
 	return conn, nil
 }
@@ -121,7 +135,7 @@ func (t *sshTransport) Close() error {
 	return err
 }
 
-func openDialStdio(c *ssh.Client) (net.Conn, error) {
+func openDialStdio(c *ssh.Client, command string) (net.Conn, error) {
 	sess, err := c.NewSession()
 	if err != nil {
 		return nil, err
@@ -136,7 +150,7 @@ func openDialStdio(c *ssh.Client) (net.Conn, error) {
 		sess.Close()
 		return nil, err
 	}
-	if err := sess.Start(dialStdioCommand); err != nil {
+	if err := sess.Start(command); err != nil {
 		sess.Close()
 		return nil, err
 	}

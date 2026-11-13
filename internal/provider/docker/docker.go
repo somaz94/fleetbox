@@ -44,6 +44,7 @@ type Config struct {
 	User           string `yaml:"user"`
 	KeyFile        string `yaml:"keyFile"`
 	KnownHostsFile string `yaml:"knownHostsFile"`
+	DockerPath     string `yaml:"dockerPath"`
 }
 
 // Provider is the Docker adapter for one host.

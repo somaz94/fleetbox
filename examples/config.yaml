@@ -48,6 +48,8 @@ targets:
       user: fleetbox
       keyFile: /etc/fleetbox/ssh/id_ed25519
       knownHostsFile: /etc/fleetbox/ssh/known_hosts
+      # Only where the CLI is not on a non-interactive session's PATH, as on a NAS.
+      # dockerPath: /usr/local/bin/docker
 # Optional. Every key has a default; these tune what is raised and when.
 findings:
   stuckAfter: 30m

@@ -156,7 +156,7 @@ A target covers every cluster in its region unless `clusters` names a subset. Ea
 
 Transport is an interface inside the provider:
 
-- **ssh** (first release): connects with `golang.org/x/crypto/ssh` and runs `docker system dial-stdio` on the host. It does not shell out to an `ssh` binary, which the distroless image does not have. A host key must be pinned through `known_hosts`; a target without one is refused rather than trusted on first use.
+- **ssh** (first release): connects with `golang.org/x/crypto/ssh` and runs `docker system dial-stdio` on the host. It does not shell out to an `ssh` binary, which the distroless image does not have. A host key must be pinned through `known_hosts`; a target without one is refused rather than trusted on first use. `dockerPath` names the CLI when it is not on the PATH of a non-interactive session, as on NAS appliances that install it under `/usr/local/bin`; it must be an absolute path of letters, digits and `._/-`, because the remote shell parses it.
 - **agent** (later): a small `fleetbox-agent` on the host dials out to the console and exposes only the operations fleetbox uses. No inbound port, and the console no longer holds a credential equal to root on the host.
 
 Access to the Docker API is root on that host, which is why targets default to read-only and why the agent transport exists.

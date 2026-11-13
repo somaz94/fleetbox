@@ -124,7 +124,7 @@ func serveSSHConn(nc net.Conn, cfg *ssh.ServerConfig, backend string, execs chan
 				case execs <- payload.Command:
 				default:
 				}
-				if payload.Command != dialStdioCommand {
+				if !strings.HasSuffix(payload.Command, dialStdioArgs) {
 					req.Reply(false, nil)
 					ch.Close()
 					continue
@@ -171,7 +171,7 @@ func TestSSHTransportEndToEnd(t *testing.T) {
 	if len(inv.Services) != 4 {
 		t.Fatalf("services = %d", len(inv.Services))
 	}
-	if cmd := <-fx.execs; cmd != dialStdioCommand {
+	if cmd := <-fx.execs; cmd != "docker system dial-stdio" {
 		t.Fatalf("exec = %q", cmd)
 	}
 
@@ -195,6 +195,28 @@ func TestSSHTransportEndToEnd(t *testing.T) {
 	}
 	if err := tr.Close(); err != nil {
 		t.Fatalf("second close: %v", err)
+	}
+}
+
+// A NAS keeps the CLI off the non-interactive PATH; the configured path is
+// what runs on the host.
+func TestSSHTransportRunsTheConfiguredDockerPath(t *testing.T) {
+	srv := httptest.NewServer(newDaemon().handler())
+	defer srv.Close()
+	fx := startSSH(t, strings.TrimPrefix(srv.URL, "http://"))
+
+	c := sshConfig(fx)
+	c.DockerPath = "/usr/local/bin/docker"
+	tr, err := newSSHTransport(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Close()
+	if _, err := NewWithDialer("host-a", tr).Inventory(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if cmd := <-fx.execs; cmd != "/usr/local/bin/docker system dial-stdio" {
+		t.Fatalf("exec = %q", cmd)
 	}
 }
 
@@ -258,6 +280,9 @@ func TestNewSSHTransportErrors(t *testing.T) {
 		{name: "missing key file", edit: func(c *Config) { c.KeyFile = bad + "-missing" }, want: "read key"},
 		{name: "bad key", edit: func(c *Config) { c.KeyFile = bad }, want: "parse key"},
 		{name: "missing known_hosts", edit: func(c *Config) { c.KnownHostsFile = bad + "-missing" }, want: "known hosts"},
+		{name: "relative dockerPath", edit: func(c *Config) { c.DockerPath = "bin/docker" }, want: "must be an absolute path"},
+		{name: "dockerPath with shell syntax", edit: func(c *Config) { c.DockerPath = "/usr/bin/docker;id" }, want: "must be an absolute path"},
+		{name: "dockerPath with space", edit: func(c *Config) { c.DockerPath = "/usr/bin/sudo docker" }, want: "must be an absolute path"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

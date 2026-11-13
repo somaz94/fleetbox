@@ -63,6 +63,8 @@ config:
   #       user: fleetbox
   #       keyFile: /etc/fleetbox/ssh/id_ed25519
   #       knownHostsFile: /etc/fleetbox/ssh/known_hosts
+  #       # Only where docker is not on a non-interactive SSH PATH, as on a NAS.
+  #       dockerPath: /usr/local/bin/docker
   # Optional: findings tuning and Slack routes (see examples/config.yaml). A
   # route's webhookURLFile names a key of the slack Secret below.
   # findings:

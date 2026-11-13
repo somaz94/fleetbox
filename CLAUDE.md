@@ -61,7 +61,7 @@ The reasoning for each is in `docs/DESIGN.md`. Changing one means changing that 
 
 ## Common Pitfalls
 
-- **Docker over SSH**: `golang.org/x/crypto/ssh` running `docker system dial-stdio`, never an `ssh` binary (the distroless image has none). Host keys must be pinned in `known_hosts`; trust on first use is refused.
+- **Docker over SSH**: `golang.org/x/crypto/ssh` running `docker system dial-stdio`, never an `ssh` binary (the distroless image has none). Host keys must be pinned in `known_hosts`; trust on first use is refused. The remote shell parses the command, so `dockerPath` accepts only an absolute path of `[A-Za-z0-9._/-]`; do not loosen it to allow `sudo` or arguments.
 - **Docker Engine API**: the client in `internal/provider/docker/engine.go` uses unversioned paths so each daemon answers in its own version. Do not pin a version prefix.
 - **ECS stop history**: ECS forgets stopped tasks within hours; the poller writes them to the store on every refresh. Do not drop stopped tasks from `Inventory`.
 - **OpenAPI error responses are inlined per operation**, not shared through `components/responses`: with a shared response the generator gives the first status of each operation a different Go shape, which changes whenever a status is added.
