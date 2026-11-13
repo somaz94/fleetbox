@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.6.0](https://github.com/somaz94/fleetbox/compare/v0.5.0...v0.6.0) (2026-11-13)
+
+### Features
+
+- add an optional Gateway API HTTPRoute to the chart ([416f633](https://github.com/somaz94/fleetbox/commit/416f633307c80ef54823374c95ff9d8504983b52))
+
+### Code Refactoring
+
+- split chart templates by resource ([d8c3cac](https://github.com/somaz94/fleetbox/commit/d8c3cac74edc3a698e8ce35ba4301953ff2f0290))
+
+### Chores
+
+- bump version to v0.6.0 ([c76398c](https://github.com/somaz94/fleetbox/commit/c76398cbf2deabedce04a057a5cf77e132a8e65b))
+
+### Contributors
+
+- somaz
+
+<br/>
+
 ## [v0.5.0](https://github.com/somaz94/fleetbox/compare/v0.4.0...v0.5.0) (2026-11-13)
 
 ### Features
