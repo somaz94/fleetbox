@@ -52,8 +52,8 @@ type Provider struct {
 	engine *engine
 	now    func() time.Time
 
-	mu      sync.Mutex
-	digests map[string]string // image ID -> repo digest; image IDs are content addresses
+	mu     sync.Mutex
+	images map[string]imageInfo // by image ID; image IDs are content addresses
 }
 
 // New builds the adapter from the target's `docker:` block.
@@ -76,7 +76,7 @@ func New(t config.Target) (provider.Provider, error) {
 
 // NewWithDialer builds the adapter over any transport; tests dial a fake daemon.
 func NewWithDialer(target string, d Dialer) *Provider {
-	return &Provider{target: target, engine: newEngine(d), now: time.Now, digests: map[string]string{}}
+	return &Provider{target: target, engine: newEngine(d), now: time.Now, images: map[string]imageInfo{}}
 }
 
 func (p *Provider) Kind() string { return Kind }
@@ -169,11 +169,11 @@ func (p *Provider) build(ctx context.Context, summaries []containerSummary, only
 		if err != nil {
 			return model.Inventory{}, err
 		}
-		digest, err := p.digest(ctx, s.ImageID)
+		img, err := p.image(ctx, s.ImageID)
 		if err != nil {
 			return model.Inventory{}, err
 		}
-		in := mapContainer(ref, s, cj, digest)
+		in := mapContainer(ref, s, cj, img)
 		inv.Instances = append(inv.Instances, in)
 
 		svc, ok := services[ref]
@@ -184,7 +184,7 @@ func (p *Provider) build(ctx context.Context, summaries []containerSummary, only
 		}
 		if in.Status == model.StatusRunning {
 			*svc.Running++
-			digests[ref][digest] = true
+			digests[ref][img.digest] = true
 		}
 		for k, v := range s.Labels {
 			if strings.HasPrefix(k, labelPrefix) {
@@ -217,43 +217,65 @@ func (p *Provider) serviceRef(labels map[string]string, name string) model.Servi
 	return model.ServiceRef{Target: p.target, Scope: StandaloneScope, Name: name}
 }
 
-// digest resolves an image ID to its repository digest. A locally built image
-// has none, which is reported as absent.
-func (p *Provider) digest(ctx context.Context, imageID string) (string, error) {
+// imageInfo is what fleetbox keeps of an image: its repository digest, absent
+// for a locally built image, and when it was built.
+type imageInfo struct {
+	digest  string
+	created *time.Time
+}
+
+// image resolves an image ID once; an image removed while a stopped container
+// still references it is reported with nothing known.
+func (p *Provider) image(ctx context.Context, imageID string) (imageInfo, error) {
 	if imageID == "" {
-		return "", nil
+		return imageInfo{}, nil
 	}
 	p.mu.Lock()
-	d, ok := p.digests[imageID]
+	info, ok := p.images[imageID]
 	p.mu.Unlock()
 	if ok {
-		return d, nil
+		return info, nil
 	}
 	img, err := p.engine.inspectImage(ctx, imageID)
 	if errors.Is(err, provider.ErrNotFound) {
-		return "", nil // image removed while a stopped container still references it
+		return imageInfo{}, nil
 	}
 	if err != nil {
-		return "", err
+		return imageInfo{}, err
 	}
 	if len(img.RepoDigests) > 0 {
 		if _, after, ok := strings.Cut(img.RepoDigests[0], "@"); ok {
-			d = after
+			info.digest = after
 		}
 	}
+	// Reproducible builders (ko, Bazel, nix) stamp the Unix epoch, which says nothing about age.
+	if c := parseTime(img.Created); c != nil && c.Unix() > 0 {
+		info.created = c
+	}
 	p.mu.Lock()
-	p.digests[imageID] = d
+	p.images[imageID] = info
 	p.mu.Unlock()
-	return d, nil
+	return info, nil
 }
 
-func mapContainer(ref model.ServiceRef, s containerSummary, cj containerJSON, digest string) model.Instance {
+// hasHealthCheck reads the container's own configuration, which already
+// carries a HEALTHCHECK inherited from its image; NONE switches one off.
+func hasHealthCheck(cj containerJSON) bool {
+	if cj.State.Health != nil {
+		return true
+	}
+	h := cj.Config.Healthcheck
+	return h != nil && len(h.Test) > 0 && h.Test[0] != "NONE"
+}
+
+func mapContainer(ref model.ServiceRef, s containerSummary, cj containerJSON, img imageInfo) model.Instance {
 	name := containerName(s.Names)
-	c := model.Container{Name: name, Image: s.Image, Digest: digest, Status: s.State}
+	c := model.Container{Name: name, Image: s.Image, Digest: img.digest, Status: s.State,
+		ImageCreated: img.created, HealthCheck: model.Ptr(hasHealthCheck(cj))}
 	in := model.Instance{
 		Ref:       model.InstanceRef{Service: ref, ID: shortID(s.ID)},
 		Status:    statusOf(s.State),
-		Revision:  digest,
+		Revision:  img.digest,
 		StartedAt: parseTime(cj.State.StartedAt),
 		Restarts:  model.Ptr(cj.RestartCount),
 	}

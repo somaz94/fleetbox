@@ -208,6 +208,11 @@ func checkInventory(t *testing.T, fx Fixture, inv model.Inventory) {
 		default:
 			t.Fatalf("instance %v has non-normalised status %q", in.Ref, in.Status)
 		}
+		for _, c := range in.Containers {
+			if c.ImageCreated != nil && c.ImageCreated.IsZero() {
+				t.Fatalf("instance %v container %q reports a zero image time instead of none", in.Ref, c.Name)
+			}
+		}
 	}
 	checkSortedInstances(t, inv.Instances)
 }

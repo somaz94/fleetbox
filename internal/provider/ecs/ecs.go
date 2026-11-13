@@ -176,6 +176,7 @@ func (p *Provider) Inventory(ctx context.Context) (model.Inventory, error) {
 		return model.Inventory{}, err
 	}
 	var inv model.Inventory
+	unreadable := map[string]bool{}
 	for _, cluster := range clusters {
 		svcs, err := p.describeAllServices(ctx, cluster)
 		if err != nil {
@@ -196,8 +197,11 @@ func (p *Provider) Inventory(ctx context.Context) (model.Inventory, error) {
 			if !ok || !known[name] {
 				continue // standalone RunTask tasks have no service
 			}
-			inv.Instances = append(inv.Instances, p.mapTask(cluster, name, task))
+			inv.Instances = append(inv.Instances, p.instance(ctx, cluster, name, task, unreadable))
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return model.Inventory{}, err // health checks skipped past the deadline must not pass as read
 	}
 	sortInventory(&inv)
 	return inv, nil
@@ -213,8 +217,12 @@ func (p *Provider) Service(ctx context.Context, ref model.ServiceRef) (model.Ser
 		return model.ServiceDetail{}, err
 	}
 	d := model.ServiceDetail{Service: p.mapService(ref.Scope, svc), Instances: []model.Instance{}}
+	unreadable := map[string]bool{}
 	for _, task := range tasks {
-		d.Instances = append(d.Instances, p.mapTask(ref.Scope, ref.Name, task))
+		d.Instances = append(d.Instances, p.instance(ctx, ref.Scope, ref.Name, task, unreadable))
+	}
+	if err := ctx.Err(); err != nil {
+		return model.ServiceDetail{}, err
 	}
 	sortInstances(d.Instances)
 	return d, nil
@@ -461,6 +469,32 @@ func (p *Provider) taskDefinition(ctx context.Context, arn string) (*types.TaskD
 	}
 	p.taskDefs.Store(arn, out.TaskDefinition)
 	return out.TaskDefinition, nil
+}
+
+// instance maps a task and, for a running one, marks which containers define a
+// health check; an unreadable task definition leaves that absent, asked once
+// per read, rather than failing the read.
+func (p *Provider) instance(ctx context.Context, cluster, service string, t types.Task, unreadable map[string]bool) model.Instance {
+	in := p.mapTask(cluster, service, t)
+	arn := aws.ToString(t.TaskDefinitionArn)
+	if in.Status != model.StatusRunning || unreadable[arn] {
+		return in
+	}
+	td, err := p.taskDefinition(ctx, arn)
+	if err != nil {
+		unreadable[arn] = true
+		return in
+	}
+	checked := map[string]bool{}
+	for _, cd := range td.ContainerDefinitions {
+		checked[aws.ToString(cd.Name)] = cd.HealthCheck != nil
+	}
+	for i, c := range in.Containers {
+		if v, ok := checked[c.Name]; ok {
+			in.Containers[i].HealthCheck = model.Ptr(v)
+		}
+	}
+	return in
 }
 
 func (p *Provider) mapService(cluster string, s types.Service) model.Service {

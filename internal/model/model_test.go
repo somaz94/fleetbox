@@ -48,6 +48,7 @@ func TestStopRecordOf(t *testing.T) {
 		ok       bool
 		wantExit *int
 		wantImg  string
+		reason   string
 	}{
 		{name: "running", in: Instance{Ref: ref, Status: StatusRunning}},
 		{name: "stopped without time", in: Instance{Ref: ref, Status: StatusStopped}},
@@ -56,9 +57,22 @@ func TestStopRecordOf(t *testing.T) {
 			in: Instance{Ref: ref, Status: StatusStopped, StoppedAt: &stopped, StopReason: "Essential container exited",
 				Containers: []Container{
 					{Name: "sidecar", Image: "envoy", Digest: "sha256:a", ExitCode: Ptr(0)},
-					{Name: "app", Image: "app", ExitCode: Ptr(137)},
+					{Name: "app", Image: "app", ExitCode: Ptr(137), Reason: "OutOfMemoryError: Container killed due to memory usage"},
 				}},
 			ok: true, wantExit: Ptr(137), wantImg: "envoy",
+			reason: "Essential container exited; app: OutOfMemoryError: Container killed due to memory usage",
+		},
+		{
+			name: "a container reason already in the instance's is not repeated",
+			in: Instance{Ref: ref, Status: StatusStopped, StoppedAt: &stopped, StopReason: "exited with code 1",
+				Containers: []Container{{Name: "app", Image: "app", ExitCode: Ptr(1), Reason: "exited with code 1"}}},
+			ok: true, wantExit: Ptr(1), wantImg: "app", reason: "exited with code 1",
+		},
+		{
+			name: "a container reason stands alone",
+			in: Instance{Ref: ref, Status: StatusStopped, StoppedAt: &stopped,
+				Containers: []Container{{Name: "app", Image: "app", Reason: "CannotPullContainerError"}}},
+			ok: true, wantImg: "app", reason: "app: CannotPullContainerError",
 		},
 		{
 			name: "clean exit is kept",
@@ -81,7 +95,7 @@ func TestStopRecordOf(t *testing.T) {
 			if !ok {
 				return
 			}
-			if !rec.StoppedAt.Equal(stopped) || rec.Instance != ref || rec.Image != tt.wantImg {
+			if !rec.StoppedAt.Equal(stopped) || rec.Instance != ref || rec.Image != tt.wantImg || rec.Reason != tt.reason {
 				t.Fatalf("unexpected record %+v", rec)
 			}
 			switch {

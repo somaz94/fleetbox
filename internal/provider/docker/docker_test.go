@@ -182,6 +182,9 @@ func newDaemon() *fakeDaemon {
 
 	web2 := running("aaaaaaaaaa02ffff", "shop-web-2", "shop", "web", "sha256:img1", nil)
 	web2.inspect.RestartCount = 3
+	web2.inspect.Config.Healthcheck = &struct {
+		Test []string `json:"Test"`
+	}{Test: []string{"CMD-SHELL", "curl -f http://localhost/"}}
 
 	worker := running("bbbbbbbbbb01ffff", "shop-worker-1", "shop", "worker", "sha256:gone", nil)
 	worker.summary.State, worker.summary.Status = "exited", "Exited (137) 5 minutes ago"
@@ -200,6 +203,9 @@ func newDaemon() *fakeDaemon {
 	}{{ExitCode: 1, Output: "curl: connection refused\n"}}}
 
 	api1 := running("cccccccccc01ffff", "shop-api-1", "shop", "api", "sha256:img1", nil)
+	api1.inspect.Config.Healthcheck = &struct {
+		Test []string `json:"Test"`
+	}{Test: []string{"NONE"}}
 	api2 := running("cccccccccc02ffff", "shop-api-2", "shop", "api", "sha256:img4", nil)
 
 	redis := running("dddddddddd01ffff", "redis", "", "", "sha256:local", nil)
@@ -209,8 +215,8 @@ func newDaemon() *fakeDaemon {
 	return &fakeDaemon{
 		containers: []fakeContainer{web1, web2, worker, api1, api2, redis},
 		images: map[string]imageJSON{
-			"sha256:img1":  {RepoDigests: []string{"example/web@sha256:d1"}},
-			"sha256:img4":  {RepoDigests: []string{"example/web@sha256:d4"}},
+			"sha256:img1":  {RepoDigests: []string{"example/web@sha256:d1"}, Created: "2025-09-22T10:11:12.123456789Z"},
+			"sha256:img4":  {RepoDigests: []string{"example/web@sha256:d4"}, Created: "1970-01-01T00:00:00Z"},
 			"sha256:local": {},
 		},
 		events: []eventMessage{
@@ -293,6 +299,21 @@ func TestInventory(t *testing.T) {
 	c := w1.Containers[0]
 	if c.Name != "shop-web-1" || c.Digest != "sha256:d1" || len(c.Ports) != 2 || *c.Ports[0].Host != 80 || c.Ports[1].Host != nil || c.ExitCode != nil {
 		t.Fatalf("web-1 container = %+v", c)
+	}
+	if !c.ImageCreated.Equal(time.Date(2025, 9, 22, 10, 11, 12, 123456789, time.UTC)) || !*c.HealthCheck {
+		t.Fatalf("web-1 image time and health check = %v, %v", c.ImageCreated, c.HealthCheck)
+	}
+	// A health check comes from the container's configuration even before it
+	// has run, and NONE switches an inherited one off.
+	for id, want := range map[string]bool{"aaaaaaaaaa02": true, "cccccccccc01": false, "dddddddddd01": false} {
+		if got := byID[id].Containers[0].HealthCheck; got == nil || *got != want {
+			t.Fatalf("%s health check = %v, want %v", id, got, want)
+		}
+	}
+	for _, id := range []string{"dddddddddd01", "bbbbbbbbbb01", "cccccccccc02"} {
+		if got := byID[id].Containers[0].ImageCreated; got != nil {
+			t.Fatalf("%s image time = %v; none, removed or epoch-stamped images must report none", id, got)
+		}
 	}
 	wk := byID["bbbbbbbbbb01"]
 	if wk.Status != model.StatusStopped || *wk.Containers[0].ExitCode != 137 || !wk.StoppedAt.Equal(t0.Add(time.Hour)) {

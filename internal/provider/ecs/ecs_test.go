@@ -299,8 +299,9 @@ func newFake() *fakeECS {
 		taskDefs: map[string]*types.TaskDefinition{
 			acct + ":task-definition/api:7": {ContainerDefinitions: []types.ContainerDefinition{
 				{Name: aws.String("envoy")},
-				{Name: aws.String("app"), LogConfiguration: &types.LogConfiguration{LogDriver: types.LogDriverAwslogs,
-					Options: map[string]string{"awslogs-group": "/ecs/api", "awslogs-stream-prefix": "ecs"}}},
+				{Name: aws.String("app"), HealthCheck: &types.HealthCheck{Command: []string{"CMD-SHELL", "curl -f http://localhost/"}},
+					LogConfiguration: &types.LogConfiguration{LogDriver: types.LogDriverAwslogs,
+						Options: map[string]string{"awslogs-group": "/ecs/api", "awslogs-stream-prefix": "ecs"}}},
 				{Name: aws.String("noprefix"), LogConfiguration: &types.LogConfiguration{LogDriver: types.LogDriverAwslogs,
 					Options: map[string]string{"awslogs-group": "/ecs/x"}}},
 				{Name: aws.String("other"), LogConfiguration: &types.LogConfiguration{LogDriver: types.LogDriverAwslogs,
@@ -391,6 +392,36 @@ func TestInventory(t *testing.T) {
 	if stop.Status != model.StatusStopped || stop.StopReason == "" || *stop.Containers[0].ExitCode != 137 {
 		t.Fatalf("t-stop = %+v", stop)
 	}
+
+	// Health checks come from a running task's definition, read once per ARN
+	// for every task here; a stopped task reports none.
+	if app.HealthCheck == nil || !*app.HealthCheck || envoy.HealthCheck == nil || *envoy.HealthCheck {
+		t.Fatalf("health checks: app %v, envoy %v", app.HealthCheck, envoy.HealthCheck)
+	}
+	if stop.Containers[0].HealthCheck != nil {
+		t.Fatal("a stopped task's health check must be absent")
+	}
+	if f.calls["DescribeTaskDefinition"] != 1 {
+		t.Fatalf("DescribeTaskDefinition calls = %d", f.calls["DescribeTaskDefinition"])
+	}
+}
+
+func TestInventoryWithoutTaskDefinitions(t *testing.T) {
+	f := &failOn{fakeECS: newFake(), op: "DescribeTaskDefinition"}
+	inv, err := NewWithClients("prod", Config{}, f, nil).Inventory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.calls["DescribeTaskDefinition"] != 1 {
+		t.Fatalf("an unreadable task definition was asked for %d times", f.calls["DescribeTaskDefinition"])
+	}
+	for _, in := range inv.Instances {
+		for _, c := range in.Containers {
+			if c.HealthCheck != nil {
+				t.Fatalf("%v %s: health check %v without a task definition", in.Ref, c.Name, *c.HealthCheck)
+			}
+		}
+	}
 }
 
 func TestInventoryConfiguredClusters(t *testing.T) {
@@ -431,6 +462,7 @@ type failOn struct {
 
 func (f *failOn) check(op string) error {
 	if op == f.op {
+		f.begin(context.Background(), op) // count the failed call
 		return errors.New("boom")
 	}
 	return nil
@@ -487,6 +519,13 @@ func TestService(t *testing.T) {
 	}
 	if len(d.Instances) != 3 || d.Instances[0].Ref.ID != "t-1" {
 		t.Fatalf("instances = %+v", d.Instances)
+	}
+	for _, in := range d.Instances {
+		for _, c := range in.Containers {
+			if in.Status == model.StatusRunning && c.Name == "app" && (c.HealthCheck == nil || !*c.HealthCheck) {
+				t.Fatalf("refresh dropped %v app's health check: %v", in.Ref, c.HealthCheck)
+			}
+		}
 	}
 
 	f.services["web"][1].Status = aws.String("INACTIVE")
@@ -775,5 +814,31 @@ func TestOperations(t *testing.T) {
 	inactive.err = &types.ServiceNotActiveException{Message: aws.String("inactive")}
 	if err := newTestProvider(newFake(), &fakeLogs{}, nil).WithOperateClient(inactive).Restart(ctx, apiRef); !errors.Is(err, provider.ErrNotFound) {
 		t.Fatalf("inactive service: %v", err)
+	}
+}
+
+// cancelOn cancels the read while task definitions are being fetched.
+type cancelOn struct {
+	*fakeECS
+	cancel context.CancelFunc
+}
+
+func (f *cancelOn) DescribeTaskDefinition(ctx context.Context, _ *ecs.DescribeTaskDefinitionInput, _ ...func(*ecs.Options)) (*ecs.DescribeTaskDefinitionOutput, error) {
+	f.cancel()
+	return nil, ctx.Err()
+}
+
+func TestReadCancelledDuringTaskDefinitions(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	p := NewWithClients("prod", Config{}, &cancelOn{fakeECS: newFake(), cancel: cancel}, nil)
+	if _, err := p.Inventory(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("inventory: err = %v, want context.Canceled", err)
+	}
+	ctx, cancel = context.WithCancel(context.Background())
+	defer cancel()
+	p = NewWithClients("prod", Config{}, &cancelOn{fakeECS: newFake(), cancel: cancel}, nil)
+	if _, err := p.Service(ctx, apiRef); !errors.Is(err, context.Canceled) {
+		t.Fatalf("service: err = %v, want context.Canceled", err)
 	}
 }

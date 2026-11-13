@@ -75,14 +75,18 @@ type containerJSON struct {
 		} `json:"Health"`
 	} `json:"State"`
 	Config struct {
-		Image  string            `json:"Image"`
-		Labels map[string]string `json:"Labels"`
-		Tty    bool              `json:"Tty"`
+		Image       string            `json:"Image"`
+		Labels      map[string]string `json:"Labels"`
+		Tty         bool              `json:"Tty"`
+		Healthcheck *struct {
+			Test []string `json:"Test"`
+		} `json:"Healthcheck"`
 	} `json:"Config"`
 }
 
 type imageJSON struct {
 	RepoDigests []string `json:"RepoDigests"`
+	Created     string   `json:"Created"`
 }
 
 type eventMessage struct {

@@ -325,7 +325,7 @@ A finding is a condition fleetbox noticed and keeps track of. An evaluator in `i
 |---|---|---|
 | **drift** | Services that are the same app (the `fleetbox.io/app` tag or label, otherwise the same service name) in targets of different `env` within one provider, running different image digests. Matching never crosses providers, and a target without `env` takes no part | `driftAfter` |
 | **stuck** | ECS: a rollout `IN_PROGRESS` since it started, or fewer running than desired. Docker: a restart count that keeps rising. Any provider: a running instance that is unhealthy | `stuckAfter` |
-| **why** | A stop within `failedStopWindow` that exited non-zero or was killed for memory, read from the store, so it outlives ECS's own short memory of stopped tasks | at once |
+| **why** | A stop within `failedStopWindow` that exited with a code other than 0 or a stop signal's (130, 137, 143), or was killed for memory (Docker's `OOMKilled`, ECS's `OutOfMemoryError` on the container), read from the store, so it outlives ECS's own short memory of stopped tasks. A deployment or a `docker compose restart` stops containers with a signal, and is not a failure | at once |
 | **hygiene** | A running image tagged `latest`, or with neither tag nor digest; a Docker image older than `imageMaxAge`; a service none of whose containers has a health check | at once |
 
 - Each finding has a kind, a rule within it, a severity (`warning`, or `info` for hygiene), a summary and the evidence it was raised on: the digests per environment, how long a rollout has run, the failed stops with their exit codes, the image.

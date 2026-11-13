@@ -93,6 +93,10 @@ type Container struct {
 	ExitCode *int   `json:"exitCode,omitempty"`
 	Reason   string `json:"reason,omitempty"`
 	Ports    []Port `json:"ports,omitempty"`
+	// ImageCreated is when the image was built, if the provider can tell.
+	ImageCreated *time.Time `json:"imageCreated,omitempty"`
+	// HealthCheck reports whether the container defines one; nil when unknown.
+	HealthCheck *bool `json:"healthCheck,omitempty"`
 }
 
 // Instance is one running or recently stopped copy of a service.
@@ -148,7 +152,9 @@ type StopRecord struct {
 }
 
 // StopRecordOf returns the record for a stopped instance, or false when the
-// instance is not stopped or carries no stop time.
+// instance is not stopped or carries no stop time. Container reasons the
+// instance's own reason lacks are appended: ECS reports an out-of-memory kill
+// only on the container.
 func StopRecordOf(in Instance) (StopRecord, bool) {
 	if in.Status != StatusStopped || in.StoppedAt == nil {
 		return StopRecord{}, false
@@ -157,6 +163,12 @@ func StopRecordOf(in Instance) (StopRecord, bool) {
 	for _, c := range in.Containers {
 		if rec.Image == "" {
 			rec.Image, rec.Digest = c.Image, c.Digest
+		}
+		if c.Reason != "" && !strings.Contains(rec.Reason, c.Reason) {
+			if rec.Reason != "" {
+				rec.Reason += "; "
+			}
+			rec.Reason += c.Name + ": " + c.Reason
 		}
 		if c.ExitCode != nil && *c.ExitCode != 0 && rec.ExitCode == nil {
 			code := *c.ExitCode
