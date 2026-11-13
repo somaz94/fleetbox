@@ -2,7 +2,7 @@ import { http as untyped, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import { createOpenApiHttp } from "openapi-msw";
 import type { paths } from "@/api/schema";
-import { detail, me, services, targets } from "@/test/fixtures";
+import { audit, detail, me, services, targets } from "@/test/fixtures";
 
 export const http = createOpenApiHttp<paths>({ baseUrl: `${window.location.origin}/api/v1` });
 
@@ -14,6 +14,7 @@ export const handlers = [
   http.get("/services/{target}/{scope}/{service}/events", ({ response }) =>
     response(200).json([{ time: "2026-01-01T00:01:00Z", severity: "warning", message: "service api has reached a steady state" }]),
   ),
+  http.get("/audit", ({ response }) => response(200).json({ entries: audit })),
   untyped.post(`${window.location.origin}/auth/logout`, () => HttpResponse.json({ redirect: "https://sso.example.com/logout" })),
 ];
 

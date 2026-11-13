@@ -1,13 +1,17 @@
+import { useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router";
 import { errorMessage, QueryState } from "@/components/QueryState";
 import { Ago, InstanceStatusBadge, ServiceStatusBadge } from "@/components/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ApiError, type Schemas } from "@/lib/api";
 import { shortDigest, shortID } from "@/lib/format";
-import { useEvents, useRefresh, useService, useTargets, type ServiceKey } from "@/lib/queries";
+import { useOperations } from "@/lib/permissions";
+import { useEvents, useRefresh, useRestart, useScale, useService, useTargets, type ServiceKey } from "@/lib/queries";
 import { logsHref } from "@/pages/links";
 
 export function useServiceKey(): ServiceKey {
@@ -20,6 +24,7 @@ export function ServiceDetail() {
   const detail = useService(key);
   const refresh = useRefresh(key);
   const target = useTargets().data?.find((t) => t.name === key.target);
+  const [done, setDone] = useState<string>();
 
   return (
     <div className="flex flex-col gap-6">
@@ -30,10 +35,18 @@ export function ServiceDetail() {
           </Link>{" "}
           / {key.target}/{key.scope}/{key.service}
         </h1>
-        <Button variant="outline" size="sm" className="ml-auto" disabled={refresh.isPending} onClick={() => refresh.mutate()}>
-          {refresh.isPending ? "Refreshing…" : "Refresh"}
-        </Button>
+        <div className="ml-auto flex gap-2">
+          <Button variant="outline" size="sm" disabled={refresh.isPending} onClick={() => refresh.mutate()}>
+            {refresh.isPending ? "Refreshing…" : "Refresh"}
+          </Button>
+          <Operations serviceKey={key} desired={detail.data?.service.desired} onDone={setDone} />
+        </div>
       </div>
+      {done && (
+        <p role="status" className="text-sm text-muted-foreground">
+          {done}
+        </p>
+      )}
       {refresh.isError && (
         <p role="alert" className="text-sm text-destructive">
           Refresh failed: {errorMessage(refresh.error)}
@@ -50,6 +63,114 @@ export function ServiceDetail() {
       </QueryState>
       <Events serviceKey={key} />
     </div>
+  );
+}
+
+type Action = "restart" | "scale";
+
+function Operations({ serviceKey, desired, onDone }: { serviceKey: ServiceKey; desired?: number; onDone: (msg: string) => void }) {
+  const allowed = useOperations(serviceKey.target);
+  const [open, setOpen] = useState<Action>();
+  return (
+    <>
+      {allowed.restart && (
+        <Button variant="outline" size="sm" onClick={() => setOpen("restart")}>
+          Restart
+        </Button>
+      )}
+      {allowed.scale && (
+        <Button variant="outline" size="sm" onClick={() => setOpen("scale")}>
+          Scale
+        </Button>
+      )}
+      {open && (
+        <OperationDialog
+          action={open}
+          serviceKey={serviceKey}
+          desired={desired}
+          onClose={() => setOpen(undefined)}
+          onDone={(msg) => {
+            setOpen(undefined);
+            onDone(msg);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+const MAX_DESIRED = 1000;
+
+// OperationDialog runs an operation only once the service name is typed, so a
+// stray click cannot restart or scale the wrong service.
+function OperationDialog({
+  action,
+  serviceKey,
+  desired,
+  onClose,
+  onDone,
+}: {
+  action: Action;
+  serviceKey: ServiceKey;
+  desired?: number;
+  onClose: () => void;
+  onDone: (msg: string) => void;
+}) {
+  const restart = useRestart(serviceKey);
+  const scale = useScale(serviceKey);
+  const mutation = action === "restart" ? restart : scale;
+  const [typed, setTyped] = useState("");
+  const [count, setCount] = useState(String(desired ?? 1));
+  const n = Number(count);
+  const countValid = count.trim() !== "" && Number.isInteger(n) && n >= 0 && n <= MAX_DESIRED;
+  const ready = typed === serviceKey.service && (action === "restart" || countValid) && !mutation.isPending;
+  const name = `${serviceKey.target}/${serviceKey.scope}/${serviceKey.service}`;
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (!ready) return;
+    if (action === "restart") {
+      restart.mutate(undefined, { onSuccess: () => onDone(`Restart of ${name} started.`) });
+    } else {
+      scale.mutate(n, { onSuccess: () => onDone(`${name} scaled to ${n}.`) });
+    }
+  };
+
+  return (
+    <Dialog title={action === "restart" ? `Restart ${name}` : `Scale ${name}`} onClose={onClose}>
+      <form onSubmit={submit} className="flex flex-col gap-4 text-sm">
+        <p className="text-muted-foreground">
+          {action === "restart"
+            ? "Every instance of the service is replaced. The request is recorded in the audit log."
+            : "Sets how many instances the service runs. The request is recorded in the audit log."}
+        </p>
+        {action === "scale" && (
+          <label className="flex flex-col gap-1">
+            Desired instances
+            <Input type="number" min={0} max={MAX_DESIRED} value={count} onChange={(e) => setCount(e.target.value)} />
+          </label>
+        )}
+        <label className="flex flex-col gap-1">
+          <span>
+            Type <code className="font-mono">{serviceKey.service}</code> to confirm
+          </span>
+          <Input value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" spellCheck={false} />
+        </label>
+        {mutation.isError && (
+          <p role="alert" className="text-destructive">
+            {action === "restart" ? "Restart" : "Scale"} failed: {errorMessage(mutation.error)}
+          </p>
+        )}
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" variant="destructive" disabled={!ready}>
+            {mutation.isPending ? "Working…" : action === "restart" ? "Restart service" : "Scale service"}
+          </Button>
+        </div>
+      </form>
+    </Dialog>
   );
 }
 

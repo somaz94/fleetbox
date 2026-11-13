@@ -90,3 +90,30 @@ export const me: Schemas["Me"] = {
     { name: "prod-aws", role: "operator" },
   ],
 };
+
+export const viewer: Schemas["Me"] = { ...me, user: "vic", groups: ["developers"], targets: me.targets.map((t) => ({ ...t, role: "viewer" })) };
+
+// An operable copy of the read-only ECS target.
+export const operable: Schemas["Target"][] = targets.map((t) => (t.name === "prod-aws" ? { ...t, readonly: false } : t));
+
+export const audit: Schemas["AuditEntry"][] = [
+  {
+    id: 3,
+    time: t0,
+    user: "alice",
+    subject: "sub-alice",
+    service: { target: "prod-aws", scope: "web", name: "api" },
+    action: "scale",
+    params: '{"desired":3}',
+    result: "ok",
+  },
+  {
+    id: 2,
+    time: t0,
+    user: "vic",
+    service: { target: "prod-aws", scope: "web", name: "api" },
+    action: "restart",
+    result: "denied",
+    error: 'forbidden: restart needs the operator role on target "prod-aws"',
+  },
+];

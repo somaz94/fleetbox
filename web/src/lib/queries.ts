@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { client, unwrap, type Schemas } from "@/lib/api";
 
 // Lists and details read the server's cache, which the poller keeps current.
@@ -48,14 +48,48 @@ export function useEvents(key: ServiceKey) {
   });
 }
 
-export function useRefresh(key: ServiceKey) {
+// useApplyDetail stores a service as an operation answered it and marks what
+// that answer makes stale.
+function useApplyDetail(key: ServiceKey) {
   const qc = useQueryClient();
+  return (detail: Schemas["ServiceDetail"]) => {
+    qc.setQueryData(["service", key], detail);
+    qc.invalidateQueries({ queryKey: ["services"] });
+    qc.invalidateQueries({ queryKey: ["events", key] });
+    qc.invalidateQueries({ queryKey: ["audit"] });
+  };
+}
+
+export function useRefresh(key: ServiceKey) {
   return useMutation({
     mutationFn: () => unwrap(client.POST(`${path}/refresh`, { params: { path: key } })),
-    onSuccess: (detail) => {
-      qc.setQueryData(["service", key], detail);
-      qc.invalidateQueries({ queryKey: ["services"] });
-      qc.invalidateQueries({ queryKey: ["events", key] });
-    },
+    onSuccess: useApplyDetail(key),
+  });
+}
+
+export function useRestart(key: ServiceKey) {
+  return useMutation({
+    mutationFn: () => unwrap(client.POST(`${path}/restart`, { params: { path: key } })),
+    onSuccess: useApplyDetail(key),
+  });
+}
+
+export function useScale(key: ServiceKey) {
+  return useMutation({
+    mutationFn: (desired: number) => unwrap(client.POST(`${path}/scale`, { params: { path: key }, body: { desired } })),
+    onSuccess: useApplyDetail(key),
+  });
+}
+
+export const AUDIT_PAGE = 50;
+
+export function useAudit(target?: string) {
+  return useInfiniteQuery({
+    queryKey: ["audit", target ?? ""],
+    queryFn: ({ pageParam }) =>
+      unwrap(client.GET("/audit", { params: { query: { target, before: pageParam, limit: AUDIT_PAGE } } })),
+    initialPageParam: undefined as number | undefined,
+    getNextPageParam: (last) => last.next,
+    refetchInterval: REFETCH_MS,
   });
 }

@@ -1,5 +1,6 @@
 import type { RouteObject } from "react-router";
 import { Layout } from "@/components/Layout";
+import { Audit } from "@/pages/Audit";
 import { Dashboard } from "@/pages/Dashboard";
 import { Logs } from "@/pages/Logs";
 import { NotFound, RouteError } from "@/pages/NotFound";
@@ -16,6 +17,7 @@ export const routes: RouteObject[] = [
       { path: "services", element: <Services /> },
       { path: "services/:target/:scope/:service", element: <ServiceDetail /> },
       { path: "services/:target/:scope/:service/instances/:instance/logs", element: <Logs /> },
+      { path: "audit", element: <Audit /> },
       { path: "*", element: <NotFound /> },
     ],
   },

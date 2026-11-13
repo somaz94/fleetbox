@@ -27,6 +27,9 @@ export function Layout() {
             <NavLink to="/services" className={navClass}>
               Services
             </NavLink>
+            <NavLink to="/audit" className={navClass}>
+              Audit
+            </NavLink>
           </nav>
           <div className="ml-auto flex items-center gap-3 text-sm">
             {signOutError && <span className="text-destructive">{signOutError}</span>}
