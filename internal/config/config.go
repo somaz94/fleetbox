@@ -16,9 +16,13 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"slices"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/somaz94/fleetbox/internal/model"
 )
 
 const (
@@ -30,6 +34,13 @@ const (
 	DefaultSessionTTL  = 12 * time.Hour
 	MinSessionTTL      = 5 * time.Minute
 	DefaultGroupsClaim = "groups"
+
+	DefaultFindingsInterval = time.Minute
+	MinFindingsInterval     = 10 * time.Second
+	DefaultDriftAfter       = time.Hour
+	DefaultStuckAfter       = 15 * time.Minute
+	DefaultFailedStopWindow = 24 * time.Hour
+	DefaultImageMaxAge      = 90 * 24 * time.Hour
 )
 
 // DefaultScopes are requested besides openid when auth.oidc.scopes is unset.
@@ -44,10 +55,22 @@ const (
 var namePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 type Config struct {
-	Server  Server   `yaml:"server"`
-	Store   Store    `yaml:"store"`
-	Auth    Auth     `yaml:"auth"`
-	Targets []Target `yaml:"targets"`
+	Server   Server   `yaml:"server"`
+	Store    Store    `yaml:"store"`
+	Auth     Auth     `yaml:"auth"`
+	Targets  []Target `yaml:"targets"`
+	Findings Findings `yaml:"findings"`
+}
+
+// Findings tunes the evaluator. Every field is optional, and zero means the
+// default, so a delay cannot be set to nothing.
+type Findings struct {
+	Interval         time.Duration `yaml:"interval"`
+	DriftAfter       time.Duration `yaml:"driftAfter"`
+	StuckAfter       time.Duration `yaml:"stuckAfter"`
+	FailedStopWindow time.Duration `yaml:"failedStopWindow"`
+	ImageMaxAge      time.Duration `yaml:"imageMaxAge"`
+	Disabled         []string      `yaml:"disabled"`
 }
 
 type Server struct {
@@ -211,6 +234,21 @@ func (c *Config) applyDefaults() {
 			c.Targets[i].Interval = DefaultInterval
 		}
 	}
+	f := &c.Findings
+	for _, d := range []struct {
+		v   *time.Duration
+		def time.Duration
+	}{
+		{&f.Interval, DefaultFindingsInterval},
+		{&f.DriftAfter, DefaultDriftAfter},
+		{&f.StuckAfter, DefaultStuckAfter},
+		{&f.FailedStopWindow, DefaultFailedStopWindow},
+		{&f.ImageMaxAge, DefaultImageMaxAge},
+	} {
+		if *d.v == 0 {
+			*d.v = d.def
+		}
+	}
 }
 
 // Validate checks everything that does not need a provider to answer.
@@ -286,12 +324,34 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Errorf("server.publicURL: %w (auth.proxy checks the browser's Origin against it)", err))
 		}
 	}
+	errs = append(errs, c.Findings.validate()...)
 	if loopback, err := IsLoopback(c.Server.Listen); err != nil {
 		errs = append(errs, fmt.Errorf("server.listen: %w", err))
 	} else if !loopback && c.Auth.OIDC == nil {
 		errs = append(errs, fmt.Errorf("server.listen %q is reachable beyond this host: configure auth.oidc or bind to 127.0.0.1", c.Server.Listen))
 	}
 	return errors.Join(errs...)
+}
+
+func (f Findings) validate() []error {
+	var errs []error
+	if f.Interval < MinFindingsInterval {
+		errs = append(errs, fmt.Errorf("findings.interval must be at least %s", MinFindingsInterval))
+	}
+	for _, d := range []struct {
+		name string
+		v    time.Duration
+	}{{"driftAfter", f.DriftAfter}, {"stuckAfter", f.StuckAfter}, {"failedStopWindow", f.FailedStopWindow}, {"imageMaxAge", f.ImageMaxAge}} {
+		if d.v < 0 {
+			errs = append(errs, fmt.Errorf("findings.%s must not be negative", d.name))
+		}
+	}
+	for _, k := range f.Disabled {
+		if !slices.Contains(model.FindingKinds, k) {
+			errs = append(errs, fmt.Errorf("findings.disabled: unknown kind %q, want one of %s", k, strings.Join(model.FindingKinds, ", ")))
+		}
+	}
+	return errs
 }
 
 // checkPublicURL accepts an absolute http(s) URL of the server root.

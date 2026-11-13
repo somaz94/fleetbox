@@ -1,6 +1,6 @@
 // Package store persists what must outlive a provider's own memory: stop
-// reasons (ECS forgets stopped tasks within hours), the audit log, and login
-// sessions.
+// reasons (ECS forgets stopped tasks within hours), the audit log, login
+// sessions, and findings with their transitions.
 package store
 
 import (
@@ -68,6 +68,12 @@ type Store interface {
 	RecordStops(ctx context.Context, recs []model.StopRecord) (int, error)
 	Stops(ctx context.Context, ref model.ServiceRef, limit int) ([]model.StopRecord, error)
 	PruneStops(ctx context.Context, before time.Time) (int, error)
+	StopsSince(ctx context.Context, since time.Time) ([]model.StopRecord, error)
+	ActiveFindings(ctx context.Context) ([]model.Finding, error)
+	SaveFindings(ctx context.Context, c FindingChanges) error
+	Findings(ctx context.Context, q FindingQuery) ([]model.Finding, error)
+	PruneFindings(ctx context.Context, before time.Time) (int, error)
+	FindingEvents(ctx context.Context, after int64, limit int) ([]model.FindingEvent, error)
 	AppendAudit(ctx context.Context, e AuditEntry) (int64, error)
 	FinishAudit(ctx context.Context, id int64, result, errText string) error
 	Audit(ctx context.Context, q AuditQuery) ([]AuditEntry, error)
@@ -116,6 +122,36 @@ var migrations = []string{
 	`ALTER TABLE sessions ADD COLUMN subject TEXT NOT NULL DEFAULT '';
 	ALTER TABLE audit ADD COLUMN subject TEXT NOT NULL DEFAULT '';
 	CREATE INDEX audit_by_target ON audit (target, id);`,
+	`CREATE INDEX stops_by_time ON stops (stopped_at);
+	CREATE TABLE findings (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		key         TEXT    NOT NULL,
+		kind        TEXT    NOT NULL,
+		rule        TEXT    NOT NULL,
+		severity    TEXT    NOT NULL,
+		summary     TEXT    NOT NULL,
+		services    TEXT    NOT NULL,
+		evidence    TEXT    NOT NULL,
+		first_seen  INTEGER NOT NULL,
+		last_seen   INTEGER NOT NULL,
+		opened_at   INTEGER,
+		resolved_at INTEGER
+	);
+	CREATE UNIQUE INDEX findings_active ON findings (key) WHERE resolved_at IS NULL;
+	CREATE INDEX findings_by_resolved ON findings (resolved_at);
+	CREATE TABLE finding_events (
+		id         INTEGER PRIMARY KEY AUTOINCREMENT,
+		finding    INTEGER NOT NULL,
+		transition TEXT    NOT NULL,
+		at         INTEGER NOT NULL,
+		severity   TEXT    NOT NULL,
+		summary    TEXT    NOT NULL
+	);
+	CREATE INDEX finding_events_by_finding ON finding_events (finding);
+	CREATE TABLE notify_cursors (
+		route TEXT    PRIMARY KEY,
+		event INTEGER NOT NULL
+	);`,
 }
 
 // SQLite is the single-replica Store.

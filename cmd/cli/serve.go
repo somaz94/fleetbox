@@ -15,6 +15,7 @@ import (
 	"github.com/somaz94/fleetbox/internal/config"
 	"github.com/somaz94/fleetbox/internal/console"
 	"github.com/somaz94/fleetbox/internal/core"
+	"github.com/somaz94/fleetbox/internal/findings"
 	"github.com/somaz94/fleetbox/internal/inventory"
 	"github.com/somaz94/fleetbox/internal/store"
 	"github.com/somaz94/fleetbox/web"
@@ -69,13 +70,18 @@ func serve(ctx context.Context, cfg *config.Config, ln net.Listener, logLevel st
 
 	cache := inventory.NewCache()
 	poller := inventory.NewPoller(targets, cache, st, log)
-	// The poller gets its own context so a server failure stops it too.
-	pctx, stopPoll := context.WithCancel(ctx)
-	defer stopPoll()
+	// Background loops get their own context so a server failure stops them too.
+	bctx, stopBackground := context.WithCancel(ctx)
+	defer stopBackground()
 	pollDone := make(chan struct{})
 	go func() {
-		poller.Run(pctx)
+		poller.Run(bctx)
 		close(pollDone)
+	}()
+	evalDone := make(chan struct{})
+	go func() {
+		findings.New(cfg.Findings, cache, st, log).Run(bctx)
+		close(evalDone)
 	}()
 
 	c := core.New(targets, cache, poller, st, core.BuildInfo{Version: Version, Commit: GitCommit, Date: BuildDate})
@@ -91,8 +97,9 @@ func serve(ctx context.Context, cfg *config.Config, ln net.Listener, logLevel st
 		defer cancel()
 		err = srv.Shutdown(sctx)
 	}
-	stopPoll()
+	stopBackground()
 	<-pollDone
+	<-evalDone
 	if errors.Is(err, http.ErrServerClosed) {
 		err = nil
 	}

@@ -63,6 +63,12 @@ func TestStopRecordOf(t *testing.T) {
 			reason: "Essential container exited; app: OutOfMemoryError: Container killed due to memory usage",
 		},
 		{
+			name: "an app's failure is not hidden by a sidecar stopped with a signal",
+			in: Instance{Ref: ref, Status: StatusStopped, StoppedAt: &stopped,
+				Containers: []Container{{Name: "envoy", Image: "envoy", ExitCode: Ptr(143)}, {Name: "app", Image: "app", ExitCode: Ptr(1)}}},
+			ok: true, wantExit: Ptr(1), wantImg: "envoy",
+		},
+		{
 			name: "a container reason already in the instance's is not repeated",
 			in: Instance{Ref: ref, Status: StatusStopped, StoppedAt: &stopped, StopReason: "exited with code 1",
 				Containers: []Container{{Name: "app", Image: "app", ExitCode: Ptr(1), Reason: "exited with code 1"}}},
@@ -105,5 +111,20 @@ func TestStopRecordOf(t *testing.T) {
 				t.Fatalf("exit = %v, want %d", rec.ExitCode, *tt.wantExit)
 			}
 		})
+	}
+}
+
+func TestFindingTargets(t *testing.T) {
+	f := Finding{Services: []ServiceRef{{Target: "prod"}, {Target: "dev"}, {Target: "prod"}}}
+	if got := f.Targets(); len(got) != 2 || got[0] != "dev" || got[1] != "prod" {
+		t.Fatalf("targets = %v", got)
+	}
+}
+
+func TestSignalExit(t *testing.T) {
+	for code, want := range map[int]bool{0: false, 1: false, 130: true, 137: true, 143: true, 139: false} {
+		if SignalExit(code) != want {
+			t.Errorf("SignalExit(%d) = %v", code, !want)
+		}
 	}
 }

@@ -151,6 +151,10 @@ type StopRecord struct {
 	Digest    string      `json:"digest,omitempty"`
 }
 
+// SignalExit reports whether a container ended because it was stopped on
+// purpose (SIGINT, SIGKILL after the grace period, SIGTERM) rather than failing.
+func SignalExit(code int) bool { return code == 130 || code == 137 || code == 143 }
+
 // StopRecordOf returns the record for a stopped instance, or false when the
 // instance is not stopped or carries no stop time. Container reasons the
 // instance's own reason lacks are appended: ECS reports an out-of-memory kill
@@ -170,7 +174,8 @@ func StopRecordOf(in Instance) (StopRecord, bool) {
 			}
 			rec.Reason += c.Name + ": " + c.Reason
 		}
-		if c.ExitCode != nil && *c.ExitCode != 0 && rec.ExitCode == nil {
+		// A sidecar stopped by a signal must not hide the code the app failed with.
+		if c.ExitCode != nil && *c.ExitCode != 0 && (rec.ExitCode == nil || SignalExit(*rec.ExitCode) && !SignalExit(*c.ExitCode)) {
 			code := *c.ExitCode
 			rec.ExitCode = &code
 		}

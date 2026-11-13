@@ -63,6 +63,24 @@ func TestParseValid(t *testing.T) {
 	if o.GroupsClaim != DefaultGroupsClaim || o.SessionTTL != DefaultSessionTTL || len(o.Scopes) != len(DefaultScopes) {
 		t.Fatalf("oidc defaults not applied: %+v", o)
 	}
+	want := Findings{Interval: DefaultFindingsInterval, DriftAfter: DefaultDriftAfter, StuckAfter: DefaultStuckAfter,
+		FailedStopWindow: DefaultFailedStopWindow, ImageMaxAge: DefaultImageMaxAge}
+	if f := c.Findings; f.Interval != want.Interval || f.DriftAfter != want.DriftAfter || f.StuckAfter != want.StuckAfter ||
+		f.FailedStopWindow != want.FailedStopWindow || f.ImageMaxAge != want.ImageMaxAge || f.Disabled != nil {
+		t.Fatalf("findings defaults not applied: %+v", f)
+	}
+}
+
+func TestParseFindings(t *testing.T) {
+	c, err := Parse([]byte(valid + "findings:\n  interval: 30s\n  stuckAfter: 1h\n  imageMaxAge: 720h\n  disabled: [hygiene]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := c.Findings
+	if f.Interval != 30*time.Second || f.StuckAfter != time.Hour || f.ImageMaxAge != 720*time.Hour ||
+		f.DriftAfter != DefaultDriftAfter || len(f.Disabled) != 1 || f.Disabled[0] != "hygiene" {
+		t.Fatalf("findings = %+v", f)
+	}
 }
 
 func TestParseOIDCAndProxy(t *testing.T) {
@@ -122,6 +140,10 @@ func TestParseErrors(t *testing.T) {
 		{name: "every interface without auth", doc: "server: {listen: ':8080'}\ntargets:\n  - {name: a, provider: ecs, ecs: {}}", want: "reachable beyond this host"},
 		{name: "pod address without auth", doc: "server: {listen: '192.0.2.10:8080'}\ntargets:\n  - {name: a, provider: ecs, ecs: {}}", want: "reachable beyond this host"},
 		{name: "bad listen", doc: "server: {listen: '8080'}\ntargets:\n  - {name: a, provider: ecs, ecs: {}}", want: "server.listen"},
+		{name: "fast findings", doc: "findings: {interval: 1s}\ntargets:\n  - {name: a, provider: ecs, ecs: {}}", want: "findings.interval must be at least"},
+		{name: "negative delay", doc: "findings: {stuckAfter: -1m}\ntargets:\n  - {name: a, provider: ecs, ecs: {}}", want: "findings.stuckAfter must not be negative"},
+		{name: "unknown finding kind", doc: "findings: {disabled: [hygene]}\ntargets:\n  - {name: a, provider: ecs, ecs: {}}", want: `unknown kind "hygene"`},
+		{name: "misspelled findings key", doc: "findings: {stuckafter: 1m}\ntargets:\n  - {name: a, provider: ecs, ecs: {}}", want: "stuckafter"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
