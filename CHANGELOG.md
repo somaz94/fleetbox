@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.4.0](https://github.com/somaz94/fleetbox/compare/v0.3.0...v0.4.0) (2026-11-13)
+
+### Features
+
+- send Slack notifications for finding transitions ([bbee708](https://github.com/somaz94/fleetbox/commit/bbee7082053049514c7a20a2c43b04c0e7361f9c))
+- show findings in the console with filters and severity badges ([3384417](https://github.com/somaz94/fleetbox/commit/3384417c7d3eb877afc926562f066e1fb5b65188))
+- list findings in the API, filtered by the caller's target roles ([1f5b915](https://github.com/somaz94/fleetbox/commit/1f5b91544a11c5874b7bb42662222bc421b99b58))
+- evaluate drift, stuck, why and hygiene findings on an interval ([20bcea3](https://github.com/somaz94/fleetbox/commit/20bcea348a913bb7523fc40faeace2aa2b86eebc))
+- report image build time and health check presence per container ([190031f](https://github.com/somaz94/fleetbox/commit/190031fc4f5892d87bb1d5f75ae973d3848f80ab))
+
+### Code Refactoring
+
+- tidy the findings path across store, notify and console ([f1d8c4f](https://github.com/somaz94/fleetbox/commit/f1d8c4f0871953653c8ff102d7f0d7c51e5a7f50))
+
+### Documentation
+
+- document findings, Slack notifications and upgrading from v0.3 ([9154bc6](https://github.com/somaz94/fleetbox/commit/9154bc684b78c284842f4c87b9e68c38eb83c274))
+- design findings and Slack notifications for v0.4 ([de41702](https://github.com/somaz94/fleetbox/commit/de41702997ad804607732502a2cd9a35cfdebc13))
+
+### Chores
+
+- bump version to v0.4.0 ([0f48653](https://github.com/somaz94/fleetbox/commit/0f4865326d7310d2a8bf5737e17432f69a3a02f0))
+
+### Contributors
+
+- somaz
+
+<br/>
+
 ## [v0.3.0](https://github.com/somaz94/fleetbox/compare/v0.2.0...v0.3.0) (2026-11-13)
 
 ### Features
