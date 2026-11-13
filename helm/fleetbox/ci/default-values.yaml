@@ -58,3 +58,9 @@ ingress:
   tls:
     - hosts: [fleetbox.example.com]
       secretName: fleetbox-tls
+httpRoute:
+  enabled: true
+  parentRefs:
+    - name: gateway
+      namespace: gateway-system
+  hostnames: [fleetbox.example.com]

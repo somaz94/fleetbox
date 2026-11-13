@@ -131,6 +131,17 @@ ingress:
   #         pathType: Prefix
   tls: []
 
+# A Gateway API route, for clusters that route through a Gateway instead of an
+# Ingress; TLS is the Gateway listener's.
+httpRoute:
+  enabled: false
+  annotations: {}
+  parentRefs: []
+  #   - name: gateway
+  #     namespace: gateway-system
+  hostnames: []
+  #   - fleetbox.example.com
+
 # A release may migrate the store; back up the volume before upgrading if you
 # may need to roll back to an older chart.
 persistence:
