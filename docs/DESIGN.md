@@ -78,7 +78,7 @@ Every provider maps its own nouns onto four levels:
 
 A service is addressed as `<target>/<scope>/<service>`. Scope is part of the key because ECS service names are unique only within a cluster.
 
-Normalised fields carried by every instance: `image`, `digest`, `status`, `health`, `started_at`, `stopped_at`, `stop_reason`, `exit_code`, `cpu`, `memory`, `ports`. Service-level fields: `desired`, `running`, `pending`, `revision` (task definition revision or image digest), `rollout` (state and start time of the current deployment), `labels` (ECS tags or compose labels).
+Normalised fields carried by every instance: `image`, `digest`, `status`, `health`, `created_at`, `started_at`, `stopped_at`, `stop_reason`, `exit_code`, `cpu` (vCPU limit), `memory` (MiB limit), `ports`, `addresses` (network and IP). Provider-specific instance fields: `restart_policy` and `mounts` (Docker), `launch_type` and `zone` (ECS). Command, entrypoint and environment are never read, because they can carry credentials. Service-level fields: `desired`, `running`, `pending`, `revision` (task definition revision or image digest), `rollout` (state and start time of the current deployment), `labels` (ECS tags or compose labels).
 
 A field a provider cannot supply is absent, never zero: "no data" and "zero" are different answers in a console.
 
@@ -108,6 +108,11 @@ type Operator interface {
 type Watcher interface {
     Watch(ctx context.Context) (<-chan struct{}, error)
 }
+
+// Optional. What the target points at, for the console; never a credential.
+type Describer interface {
+    Endpoint() []model.Attribute
+}
 ```
 
 `Inventory` returns a whole target in one call rather than services and then instances per service, because the efficient read is per target: ECS lists a cluster's tasks once and groups them, Docker lists every container once.
@@ -128,6 +133,7 @@ type Watcher interface {
 | Services | `ListClusters`, `ListServices`, `DescribeServices` (batched by 10) |
 | Tasks | `ListTasks` once per cluster for running and once for stopped tasks, `DescribeTasks` (batched by 100), grouped by the task's `service:<name>` group; `DescribeTaskDefinition` cached by ARN |
 | Rollout | `deployments[].rolloutState` on the service |
+| Instance detail | from `DescribeTasks`, no extra call: the task's `createdAt`, `launchType`, `availabilityZone`, `cpu` and `memory`, and each container's network interface address |
 | Events | service `events[]` and stopped tasks' `stoppedReason` |
 | Logs | `awslogs` settings from the task definition, then CloudWatch Logs `GetLogEvents`: the last page for history, then polling the forward token to follow. `StartLiveTail` would push instead of poll and is a later optimisation |
 | Restart | `UpdateService` with `forceNewDeployment` |
@@ -145,6 +151,7 @@ A target covers every cluster in its region unless `clusters` names a subset. Ea
 |---|---|
 | Services | container list grouped by `com.docker.compose.project` / `com.docker.compose.service` labels |
 | Digest | image inspect `RepoDigests` |
+| Instance detail | container inspect, already read for every container: `Created`, the restart policy and CPU and memory limits from `HostConfig`, `Mounts` (the host path behind a `/run/secrets/` mount is withheld), and each network's address |
 | Events | the `events` stream, which also keeps the cache current without polling |
 | Logs | container logs stream, demultiplexed |
 | Restart | container restart for each container of the service in turn, stopping at the first failure; a container removed since the listing is skipped, and a service with none left is not found; one-off containers from `docker compose run` are left alone, as `docker compose restart` does |
@@ -181,8 +188,8 @@ Access to the Docker API is root on that host, which is why targets default to r
 | Method and path | Purpose | Release |
 |---|---|---|
 | `GET /api/v1/info` | build version | v0.1 |
-| `GET /api/v1/targets` | targets with capabilities, staleness, last error and counts | v0.1 |
-| `GET /api/v1/services` | filtered list across targets (`target`, `provider`, `status`, `q`) with a derived status and instance counts | v0.1 |
+| `GET /api/v1/targets` | targets with capabilities, staleness, last error and counts; the endpoint they point at since v0.5 | v0.1 |
+| `GET /api/v1/services` | filtered list across targets (`target`, `provider`, `status`, `q`) with a derived status and instance counts; `q` matches `target/scope/name` or `target/name` | v0.1 |
 | `GET …` | detail from the cache: instances, rollout, revision, recorded stop history | v0.1 |
 | `POST …/refresh` | read one service fresh and update the cache | v0.1 |
 | `GET …/events` | the provider's event timeline, newest first | v0.1 |
@@ -193,6 +200,7 @@ Access to the Docker API is root on that host, which is why targets default to r
 | `GET /api/v1/findings` | open or resolved findings the caller may see; `kind`, `target`, `severity`, `state` | v0.4 |
 
 - A service's status is derived in core, the same for every transport: `idle` when nothing is desired, `down` when nothing runs, `degraded` when fewer run than desired or a running instance is unhealthy, otherwise `healthy`. A provider without a desired count (Docker) is judged on its instances alone.
+- `stoppedSince` is also derived in core: when no instance is running or pending, the newest `stopped_at` among the stopped instances the provider still lists. It is absent while anything runs, and when the provider no longer lists the stopped instances.
 - Every error, including an unknown route or a malformed parameter, answers with the `Error` schema and a code (`bad_request`, `unauthorized`, `forbidden`, `not_found`, `unsupported`, `unreachable`, `timeout`, `internal`). An internal error's text is logged, not returned.
 - Tests validate every JSON response against the spec, status code included, so the Go output and the generated TypeScript types cannot drift apart.
 - The logs endpoint is written by hand rather than generated, because the generated strict server copies a body without flushing. Once the stream has started, a failure can only arrive as an `error` event.
@@ -206,7 +214,9 @@ Access to the Docker API is root on that host, which is why targets default to r
 - The server answers every path outside `/api`, `/auth` and the probes with the build: a file when one exists, `index.html` otherwise, so client-side routes survive a reload. Hashed assets are cached for a year, `index.html` never. A Content-Security-Policy allows only the build's own scripts, styles and connections, with no inline code and no framing.
 - A 401 from the API sends the browser to `/auth/login` with the current path as `next`. Every request other than a `GET` carries the CSRF header. Sign-out is offered only when `/api/v1/me` reports `oidc` mode.
 - Lists and details refetch from the server cache on an interval; the event timeline, which the provider answers fresh, loads once and on request. SSE is used for logs only. A failed log stream stops rather than letting `EventSource` reconnect, which would replay the tail, and offers a reconnect.
-- Screens: dashboard (targets, stale or failing targets, open findings), services (filterable list), service detail (instances, revision, rollout, events, recent stop reasons), logs, findings, audit log.
+- Screens: dashboard (targets, stale or failing targets, open findings), targets (state, last error, capabilities, endpoint), services (filterable, sortable list, optionally grouped by target), service detail (instances with their addresses, mounts and limits, revision, rollout, events, recent stop reasons), logs, findings, audit log.
+- A service stopped for more than seven days is folded away at the end of the services list and left out of the dashboard's attention list; its status stays `down`. Hosts keep containers that stopped years ago, and listing them alongside today's failures buries the failures.
+- A standalone container is shown as `<target>/<name>` with a `standalone` badge; the URL keeps the `_standalone` scope.
 - Operations open a confirmation that requires typing the service name. The console hides what the user may not do; the server enforces it regardless.
 - Log lines are untrusted text and are rendered as text, never as HTML.
 
@@ -241,7 +251,7 @@ The server uses each SDK's default credential chain, so the method is a deployme
 
 From that base identity each target assumes its read role, and its operate role only for an operation.
 
-Docker SSH keys and `known_hosts`, and Slack webhook URLs, are mounted from Secrets. Credentials are never logged, never returned by the API and never written to the store.
+Docker SSH keys and `known_hosts`, and Slack webhook URLs, are mounted from Secrets. Credentials are never logged, never returned by the API and never written to the store. A target's endpoint (the Docker host and port, the ECS region and clusters) is shown to callers with a role on it; the SSH user, key and `known_hosts` paths and role ARNs are not part of it.
 
 <br/>
 
@@ -376,6 +386,7 @@ A finding is a condition fleetbox noticed and keeps track of. An evaluator in `i
 | v0.2 | Read-only console, OIDC login with role mapping on reads, Helm chart, image |
 | v0.3 | Restart and scale for operators, audit log |
 | v0.4 | Findings (drift, stuck, why, hygiene), Slack notifier |
+| v0.5 | Console: targets page, instance detail, long-stopped services folded, sorting and grouping; `dockerPath` for hosts that keep the CLI off the PATH |
 | Later | Docker agent transport, CLI as an API client, a third provider, interactive shell, revision history for drift, ECS image age |
 
 <br/>
