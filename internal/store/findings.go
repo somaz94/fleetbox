@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -133,6 +134,31 @@ func (s *SQLite) FindingEvents(ctx context.Context, after int64, limit int) ([]m
 		out = append(out, ev)
 	}
 	return out, rows.Err()
+}
+
+// LastFindingEvent returns the id of the latest transition, or 0 when none is kept.
+func (s *SQLite) LastFindingEvent(ctx context.Context) (int64, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(id), 0) FROM finding_events`).Scan(&id)
+	return id, err
+}
+
+// NotifyCursor returns the last transition a route delivered, and false for a
+// route that has never delivered.
+func (s *SQLite) NotifyCursor(ctx context.Context, route string) (int64, bool, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx, `SELECT event FROM notify_cursors WHERE route = ?`, route).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	return id, err == nil, err
+}
+
+// SetNotifyCursor records the last transition a route delivered.
+func (s *SQLite) SetNotifyCursor(ctx context.Context, route string, event int64) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO notify_cursors (route, event) VALUES (?, ?)
+		ON CONFLICT (route) DO UPDATE SET event = excluded.event`, route, event)
+	return err
 }
 
 // scanFinding reads findingColumns, after any leading columns given.

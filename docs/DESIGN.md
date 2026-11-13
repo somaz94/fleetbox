@@ -343,6 +343,8 @@ A finding is a condition fleetbox noticed and keeps track of. An evaluator in `i
 - Slack incoming webhooks, configured as routes. Each route names the targets (globs) and kinds it wants and the file holding its webhook URL. A finding goes to a route when every target it involves matches.
 - A message is sent when a finding opens and when it resolves, and for nothing else. Operations are recorded in the audit log, not announced.
 - Delivery reads the store's transitions in order, and each route keeps its own cursor there, moved only after Slack accepts the message. A failed delivery is retried with backoff and never holds up the evaluator; a restart resumes where delivery stopped. A new route starts at the latest transition, so enabling one does not replay history.
+- Delivery is at least once: a crash or a timeout after Slack accepted a message, before the cursor moved, sends that message again. Transitions are kept as long as stop history, so a route failing for longer loses the oldest ones.
+- The client follows no redirects: one would hand the URL on as a `Referer` and turn the post into a bodiless `GET`. A webhook URL must be https unless its host is loopback.
 - A webhook URL is a credential: it is read from a file and never logged, returned by the API or written to the store, error messages included.
 
 <br/>
@@ -350,7 +352,7 @@ A finding is a condition fleetbox noticed and keeps track of. An evaluator in `i
 ## Deployment
 
 - One container image published to Docker Hub as `somaz940/fleetbox`, the same registry as the sibling projects: distroless, non-root, multi-architecture, the React build embedded.
-- A Helm chart in `helm/fleetbox`, published as an OCI artefact on GHCR and as a classic repository on the `gh-pages` branch: Deployment with one replica and the `Recreate` strategy (SQLite on a PVC), Service, optional Ingress, a ServiceAccount whose token is mounted only as the audience-bound AWS web-identity token, and Secrets for OIDC, SSH and static AWS material referenced by name. The chart supports OIDC only: trusted-proxy mode needs the proxy as a sidecar, which a deployment builds by hand. It refuses to render without `config.auth.oidc` and `config.server.publicURL`, mirroring the server's refusal to serve beyond loopback unauthenticated, and it sets `store.path` itself.
+- A Helm chart in `helm/fleetbox`, published as an OCI artefact on GHCR and as a classic repository on the `gh-pages` branch: Deployment with one replica and the `Recreate` strategy (SQLite on a PVC), Service, optional Ingress, a ServiceAccount whose token is mounted only as the audience-bound AWS web-identity token, and Secrets for OIDC, SSH, Slack webhooks and static AWS material referenced by name. The chart supports OIDC only: trusted-proxy mode needs the proxy as a sidecar, which a deployment builds by hand. It refuses to render without `config.auth.oidc` and `config.server.publicURL`, mirroring the server's refusal to serve beyond loopback unauthenticated, and it sets `store.path` itself.
 - A release is a `vX.Y.Z` tag: the image, the GitHub release (notes from git-cliff) and the chart publish from it, and the major tag (`v1`) follows automatically. The chart's own `version` is bumped by hand in the release commit; its `appVersion` follows the tag.
 - Health endpoints: `/healthz` for liveness, `/readyz` once configuration loaded and the store opened. Readiness does not depend on any target being reachable.
 - Prometheus metrics: refresh duration and errors per target, cache age, operations by result.

@@ -12,3 +12,8 @@ Reach it with:
 
 Validate the configuration before rolling it out:
   kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "fleetbox.fullname" . }} -- /fleetbox check --config /etc/fleetbox/config/config.yaml
+{{- if and (dig "notify" "slack" list .Values.config) (not .Values.slack.existingSecret) }}
+
+Warning: config.notify.slack has routes but slack.existingSecret is empty; the
+server will not start unless each webhookURLFile is mounted another way.
+{{- end }}

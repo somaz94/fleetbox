@@ -63,6 +63,15 @@ config:
   #       user: fleetbox
   #       keyFile: /etc/fleetbox/ssh/id_ed25519
   #       knownHostsFile: /etc/fleetbox/ssh/known_hosts
+  # Optional: findings tuning and Slack routes (see examples/config.yaml). A
+  # route's webhookURLFile names a key of the slack Secret below.
+  # findings:
+  #   stuckAfter: 30m
+  # notify:
+  #   slack:
+  #     - name: platform
+  #       webhookURLFile: /etc/fleetbox/slack/platform
+  #       targets: ["*"]
 
 # OIDC client secret, mounted at /etc/fleetbox/oidc/client-secret.
 oidc:
@@ -72,6 +81,13 @@ oidc:
 # SSH material for Docker targets, mounted read-only at /etc/fleetbox/ssh.
 # The Secret's keys become file names, e.g. id_ed25519 and known_hosts.
 ssh:
+  existingSecret: ""
+
+# Slack incoming webhook URLs for config.notify.slack, mounted read-only at
+# /etc/fleetbox/slack: each key becomes the file a route's webhookURLFile
+# names, e.g. /etc/fleetbox/slack/platform. Read once at start-up, and a
+# missing one stops the pod: add the key before the route, restart after rotating.
+slack:
   existingSecret: ""
 
 # AWS credentials for ECS targets. Each target's readRoleArn, and its

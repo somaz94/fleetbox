@@ -74,6 +74,9 @@ type Store interface {
 	Findings(ctx context.Context, q FindingQuery) ([]model.Finding, error)
 	PruneFindings(ctx context.Context, before time.Time) (int, error)
 	FindingEvents(ctx context.Context, after int64, limit int) ([]model.FindingEvent, error)
+	LastFindingEvent(ctx context.Context) (int64, error)
+	NotifyCursor(ctx context.Context, route string) (int64, bool, error)
+	SetNotifyCursor(ctx context.Context, route string, event int64) error
 	AppendAudit(ctx context.Context, e AuditEntry) (int64, error)
 	FinishAudit(ctx context.Context, id int64, result, errText string) error
 	Audit(ctx context.Context, q AuditQuery) ([]AuditEntry, error)

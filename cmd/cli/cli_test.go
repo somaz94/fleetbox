@@ -291,6 +291,13 @@ func TestServeErrors(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 
+	// So does an unreadable Slack webhook file.
+	withSlack := *cfg
+	withSlack.Notify.Slack = []config.SlackRoute{{Name: "ops", WebhookURLFile: filepath.Join(t.TempDir(), "missing"), Targets: []string{"*"}}}
+	if err := serve(context.Background(), &withSlack, listen(), "info"); err == nil || !strings.Contains(err.Error(), "webhookURLFile") {
+		t.Fatalf("err = %v", err)
+	}
+
 	bad, _ := writeConfig(t, "  - {name: a, provider: test, test: {fail: true}}\n")
 	badCfg, _ := config.Load(bad)
 	if err := serve(context.Background(), badCfg, listen(), "info"); err == nil {

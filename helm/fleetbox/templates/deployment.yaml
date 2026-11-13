@@ -96,6 +96,11 @@ spec:
               mountPath: /etc/fleetbox/ssh
               readOnly: true
             {{- end }}
+            {{- if .Values.slack.existingSecret }}
+            - name: slack
+              mountPath: /etc/fleetbox/slack
+              readOnly: true
+            {{- end }}
             {{- if .Values.aws.webIdentity.enabled }}
             - name: aws-token
               mountPath: /var/run/secrets/aws
@@ -128,6 +133,12 @@ spec:
         {{- end }}
         {{- with .Values.ssh.existingSecret }}
         - name: ssh
+          secret:
+            secretName: {{ . }}
+            defaultMode: 0400
+        {{- end }}
+        {{- with .Values.slack.existingSecret }}
+        - name: slack
           secret:
             secretName: {{ . }}
             defaultMode: 0400

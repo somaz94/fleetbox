@@ -28,10 +28,21 @@ config:
         user: fleetbox
         keyFile: /etc/fleetbox/ssh/id_ed25519
         knownHostsFile: /etc/fleetbox/ssh/known_hosts
+  findings:
+    stuckAfter: 30m
+    disabled: [hygiene]
+  notify:
+    slack:
+      - name: platform
+        webhookURLFile: /etc/fleetbox/slack/platform
+        targets: ["*"]
+        kinds: [drift, stuck]
 oidc:
   existingSecret: fleetbox-oidc
 ssh:
   existingSecret: fleetbox-ssh
+slack:
+  existingSecret: fleetbox-slack
 aws:
   webIdentity:
     enabled: true

@@ -17,6 +17,7 @@ import (
 	"github.com/somaz94/fleetbox/internal/core"
 	"github.com/somaz94/fleetbox/internal/findings"
 	"github.com/somaz94/fleetbox/internal/inventory"
+	"github.com/somaz94/fleetbox/internal/notify"
 	"github.com/somaz94/fleetbox/internal/store"
 	"github.com/somaz94/fleetbox/web"
 )
@@ -67,6 +68,10 @@ func serve(ctx context.Context, cfg *config.Config, ln net.Listener, logLevel st
 	if err != nil {
 		return err
 	}
+	notifier, err := notify.New(cfg.Notify, cfg.Server.PublicURL, st, log)
+	if err != nil {
+		return err
+	}
 
 	cache := inventory.NewCache()
 	poller := inventory.NewPoller(targets, cache, st, log)
@@ -82,6 +87,11 @@ func serve(ctx context.Context, cfg *config.Config, ln net.Listener, logLevel st
 	go func() {
 		findings.New(cfg.Findings, cache, st, log).Run(bctx)
 		close(evalDone)
+	}()
+	notifyDone := make(chan struct{})
+	go func() {
+		notifier.Run(bctx)
+		close(notifyDone)
 	}()
 
 	c := core.New(targets, cache, poller, st, core.BuildInfo{Version: Version, Commit: GitCommit, Date: BuildDate})
@@ -100,6 +110,7 @@ func serve(ctx context.Context, cfg *config.Config, ln net.Listener, logLevel st
 	stopBackground()
 	<-pollDone
 	<-evalDone
+	<-notifyDone
 	if errors.Is(err, http.ErrServerClosed) {
 		err = nil
 	}

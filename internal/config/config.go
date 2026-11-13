@@ -60,6 +60,22 @@ type Config struct {
 	Auth     Auth     `yaml:"auth"`
 	Targets  []Target `yaml:"targets"`
 	Findings Findings `yaml:"findings"`
+	Notify   Notify   `yaml:"notify"`
+}
+
+// Notify sends finding transitions out of fleetbox.
+type Notify struct {
+	Slack []SlackRoute `yaml:"slack"`
+}
+
+// SlackRoute sends the findings whose every target matches Targets, and whose
+// kind is in Kinds (every kind when empty), to one incoming webhook. Name keys
+// the route's delivery position, so renaming it starts afresh.
+type SlackRoute struct {
+	Name           string   `yaml:"name"`
+	WebhookURLFile string   `yaml:"webhookURLFile"`
+	Targets        []string `yaml:"targets"`
+	Kinds          []string `yaml:"kinds"`
 }
 
 // Findings tunes the evaluator. Every field is optional, and zero means the
@@ -325,6 +341,7 @@ func (c *Config) Validate() error {
 		}
 	}
 	errs = append(errs, c.Findings.validate()...)
+	errs = append(errs, c.Notify.validate()...)
 	if loopback, err := IsLoopback(c.Server.Listen); err != nil {
 		errs = append(errs, fmt.Errorf("server.listen: %w", err))
 	} else if !loopback && c.Auth.OIDC == nil {
@@ -349,6 +366,41 @@ func (f Findings) validate() []error {
 	for _, k := range f.Disabled {
 		if !slices.Contains(model.FindingKinds, k) {
 			errs = append(errs, fmt.Errorf("findings.disabled: unknown kind %q, want one of %s", k, strings.Join(model.FindingKinds, ", ")))
+		}
+	}
+	return errs
+}
+
+func (n Notify) validate() []error {
+	var errs []error
+	seen := map[string]bool{}
+	for i, r := range n.Slack {
+		where := fmt.Sprintf("notify.slack[%d]", i)
+		switch {
+		case r.Name == "":
+			errs = append(errs, fmt.Errorf("%s: name is required", where))
+		case !namePattern.MatchString(r.Name):
+			errs = append(errs, fmt.Errorf("%s: name must be lowercase letters, digits and dashes", where))
+		case seen[r.Name]:
+			errs = append(errs, fmt.Errorf("%s: duplicate name %q", where, r.Name))
+		}
+		seen[r.Name] = true
+		if r.WebhookURLFile == "" {
+			errs = append(errs, fmt.Errorf("%s: webhookURLFile is required", where))
+		}
+		// Required, like a role's: which targets a channel hears about is a decision.
+		if len(r.Targets) == 0 {
+			errs = append(errs, fmt.Errorf("%s: targets is required", where))
+		}
+		for _, g := range r.Targets {
+			if _, err := path.Match(g, ""); err != nil {
+				errs = append(errs, fmt.Errorf("%s: bad target pattern %q", where, g))
+			}
+		}
+		for _, k := range r.Kinds {
+			if !slices.Contains(model.FindingKinds, k) {
+				errs = append(errs, fmt.Errorf("%s.kinds: unknown kind %q", where, k))
+			}
 		}
 	}
 	return errs

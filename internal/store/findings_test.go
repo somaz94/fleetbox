@@ -255,3 +255,33 @@ func TestFindingEventsAndRetire(t *testing.T) {
 		t.Fatal("FindingEvents on a closed store")
 	}
 }
+
+func TestNotifyCursors(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	if id, err := s.LastFindingEvent(ctx); err != nil || id != 0 {
+		t.Fatalf("last event of an empty store = %d, %v", id, err)
+	}
+	if _, ok, err := s.NotifyCursor(ctx, "ops"); ok || err != nil {
+		t.Fatalf("unknown route: ok %v, %v", ok, err)
+	}
+	if err := s.SaveFindings(ctx, FindingChanges{At: t0, Save: []FindingSave{{Finding: finding("a", model.Ptr(t0)), Opened: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	last, err := s.LastFindingEvent(ctx)
+	if err != nil || last == 0 {
+		t.Fatalf("last event = %d, %v", last, err)
+	}
+	for _, id := range []int64{last, last + 5} {
+		if err := s.SetNotifyCursor(ctx, "ops", id); err != nil {
+			t.Fatal(err)
+		}
+		if got, ok, err := s.NotifyCursor(ctx, "ops"); got != id || !ok || err != nil {
+			t.Fatalf("cursor = %d, %v, %v; want %d", got, ok, err, id)
+		}
+	}
+	s.Close()
+	if _, _, err := s.NotifyCursor(ctx, "ops"); err == nil {
+		t.Fatal("NotifyCursor on a closed store")
+	}
+}

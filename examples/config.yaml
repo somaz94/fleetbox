@@ -48,3 +48,14 @@ targets:
       user: fleetbox
       keyFile: /etc/fleetbox/ssh/id_ed25519
       knownHostsFile: /etc/fleetbox/ssh/known_hosts
+# Optional. Every key has a default; these tune what is raised and when.
+findings:
+  stuckAfter: 30m
+  disabled: [hygiene]
+notify:
+  slack:
+    # The file holds the incoming webhook URL, which is a credential.
+    - name: platform
+      webhookURLFile: /etc/fleetbox/slack/platform
+      targets: ["prod-*"]
+      kinds: [drift, stuck, why]

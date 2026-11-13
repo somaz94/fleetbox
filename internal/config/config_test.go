@@ -143,6 +143,14 @@ func TestParseErrors(t *testing.T) {
 		{name: "fast findings", doc: "findings: {interval: 1s}\ntargets:\n  - {name: a, provider: ecs, ecs: {}}", want: "findings.interval must be at least"},
 		{name: "negative delay", doc: "findings: {stuckAfter: -1m}\ntargets:\n  - {name: a, provider: ecs, ecs: {}}", want: "findings.stuckAfter must not be negative"},
 		{name: "unknown finding kind", doc: "findings: {disabled: [hygene]}\ntargets:\n  - {name: a, provider: ecs, ecs: {}}", want: `unknown kind "hygene"`},
+		{name: "slack route without name", doc: slackDoc("{webhookURLFile: /f, targets: ['*']}"), want: "notify.slack[0]: name is required"},
+		{name: "slack route bad name", doc: slackDoc("{name: Ops, webhookURLFile: /f, targets: ['*']}"), want: "name must be lowercase"},
+		{name: "slack route duplicate", doc: slackDoc("{name: a, webhookURLFile: /f, targets: ['*']}\n    - {name: a, webhookURLFile: /g, targets: ['*']}"), want: `duplicate name "a"`},
+		{name: "slack route without webhook", doc: slackDoc("{name: a, targets: ['*']}"), want: "webhookURLFile is required"},
+		{name: "slack route without targets", doc: slackDoc("{name: a, webhookURLFile: /f}"), want: "targets is required"},
+		{name: "slack route bad pattern", doc: slackDoc("{name: a, webhookURLFile: /f, targets: ['[']}"), want: "bad target pattern"},
+		{name: "slack route unknown kind", doc: slackDoc("{name: a, webhookURLFile: /f, targets: ['*'], kinds: [drfit]}"), want: `unknown kind "drfit"`},
+		{name: "misspelled slack key", doc: slackDoc("{name: a, webhookUrlFile: /f, targets: ['*']}"), want: "webhookUrlFile"},
 		{name: "misspelled findings key", doc: "findings: {stuckafter: 1m}\ntargets:\n  - {name: a, provider: ecs, ecs: {}}", want: "stuckafter"},
 	}
 	for _, tt := range tests {
@@ -215,5 +223,20 @@ func TestLoad(t *testing.T) {
 	}
 	if _, err := Load(filepath.Join(t.TempDir(), "missing.yaml")); err == nil {
 		t.Fatal("want error for a missing file")
+	}
+}
+
+func slackDoc(route string) string {
+	return "notify:\n  slack:\n    - " + route + "\ntargets:\n  - {name: a, provider: ecs, ecs: {}}"
+}
+
+func TestParseNotify(t *testing.T) {
+	c, err := Parse([]byte(valid + "notify:\n  slack:\n    - name: platform\n      webhookURLFile: /etc/fleetbox/slack/platform\n      targets: [\"prod-*\"]\n      kinds: [drift, stuck]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := c.Notify.Slack[0]
+	if r.Name != "platform" || r.WebhookURLFile != "/etc/fleetbox/slack/platform" || r.Targets[0] != "prod-*" || len(r.Kinds) != 2 {
+		t.Fatalf("route = %+v", r)
 	}
 }
