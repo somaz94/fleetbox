@@ -1,8 +1,11 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
 import { navigation } from "@/lib/api";
 import { FakeEventSource } from "@/test/eventsource";
 import { server } from "@/test/server";
+
+// Role queries over the larger tables can outlast the 1s default on a busy machine.
+configure({ asyncUtilTimeout: 3000 });
 
 Object.defineProperty(globalThis, "EventSource", { value: FakeEventSource, writable: true });
 

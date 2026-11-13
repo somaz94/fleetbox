@@ -28,3 +28,24 @@ export function TableHead({ className, ...props }: ThHTMLAttributes<HTMLTableCel
 export function TableCell({ className, ...props }: TdHTMLAttributes<HTMLTableCellElement>) {
   return <td className={cn("px-3 py-2 align-middle", className)} {...props} />;
 }
+
+export function SortableHead({
+  label,
+  active,
+  dir,
+  onSort,
+}: {
+  label: string;
+  active: boolean;
+  dir: "asc" | "desc";
+  onSort: () => void;
+}) {
+  return (
+    <TableHead aria-sort={active ? (dir === "asc" ? "ascending" : "descending") : undefined}>
+      <button type="button" onClick={onSort} className="inline-flex items-center gap-1 hover:text-foreground">
+        {label}
+        {active && <span aria-hidden="true">{dir === "asc" ? "▲" : "▼"}</span>}
+      </button>
+    </TableHead>
+  );
+}

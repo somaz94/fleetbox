@@ -1,8 +1,16 @@
 import type { Schemas } from "@/lib/api";
 import type { ServiceKey } from "@/lib/queries";
 
+// Docker's scope for a container outside compose. It stays in URLs and is
+// left out of what people read.
+export const STANDALONE = "_standalone";
+
+export function isStandalone(ref: Schemas["ServiceRef"]): boolean {
+  return ref.scope === STANDALONE;
+}
+
 export function serviceLabel(ref: Schemas["ServiceRef"]): string {
-  return `${ref.target}/${ref.scope}/${ref.name}`;
+  return isStandalone(ref) ? `${ref.target}/${ref.name}` : `${ref.target}/${ref.scope}/${ref.name}`;
 }
 
 export function serviceHref(ref: Schemas["ServiceRef"]): string {

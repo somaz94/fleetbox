@@ -7,6 +7,7 @@ import { Logs } from "@/pages/Logs";
 import { NotFound, RouteError } from "@/pages/NotFound";
 import { ServiceDetail } from "@/pages/ServiceDetail";
 import { Services } from "@/pages/Services";
+import { Targets } from "@/pages/Targets";
 
 export const routes: RouteObject[] = [
   {
@@ -15,6 +16,7 @@ export const routes: RouteObject[] = [
     errorElement: <RouteError />,
     children: [
       { index: true, element: <Dashboard /> },
+      { path: "targets", element: <Targets /> },
       { path: "services", element: <Services /> },
       { path: "services/:target/:scope/:service", element: <ServiceDetail /> },
       { path: "services/:target/:scope/:service/instances/:instance/logs", element: <Logs /> },

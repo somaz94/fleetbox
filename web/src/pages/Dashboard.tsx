@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { Schemas } from "@/lib/api";
 import { findingKinds, serviceStatuses, useFindings, useServices, useTargets } from "@/lib/queries";
+import { LONG_STOPPED_DAYS, splitLongStopped } from "@/lib/services";
 import { serviceHref, serviceLabel } from "@/pages/links";
 
 export function Dashboard() {
@@ -39,7 +40,11 @@ function Summary({ targets, services }: { targets: Schemas["Target"][]; services
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
       <Card>
         <CardHeader>
-          <CardTitle>Targets</CardTitle>
+          <CardTitle>
+            <Link to="/targets" className="hover:underline">
+              Targets
+            </Link>
+          </CardTitle>
         </CardHeader>
         <CardContent>
           <p className="text-2xl font-semibold">{targets.length}</p>
@@ -117,8 +122,11 @@ function FindingsCard() {
 
 function Attention({ targets, services }: { targets: Schemas["Target"][]; services: Schemas["Service"][] }) {
   const failing = targets.filter((t) => t.error);
-  const unhealthy = services.filter((s) => s.status === "down" || s.status === "degraded");
-  if (failing.length === 0 && unhealthy.length === 0) return null;
+  const [current, longStopped] = splitLongStopped(
+    services.filter((s) => s.status === "down" || s.status === "degraded"),
+    Date.now(),
+  );
+  if (failing.length === 0 && current.length === 0 && longStopped.length === 0) return null;
   return (
     <Card>
       <CardHeader>
@@ -133,7 +141,7 @@ function Attention({ targets, services }: { targets: Schemas["Target"][]; servic
               <span className="text-muted-foreground">{t.error}</span>
             </li>
           ))}
-          {unhealthy.map((s) => (
+          {current.map((s) => (
             <li key={serviceHref(s.ref)} className="flex items-center gap-2">
               <ServiceStatusBadge status={s.status} />
               <Link className="font-medium hover:underline" to={serviceHref(s.ref)}>
@@ -146,6 +154,14 @@ function Attention({ targets, services }: { targets: Schemas["Target"][]; servic
               )}
             </li>
           ))}
+          {longStopped.length > 0 && (
+            <li className="text-muted-foreground">
+              <Link className="hover:underline" to="/services?status=down">
+                {longStopped.length} stopped for more than {LONG_STOPPED_DAYS} days
+              </Link>{" "}
+              not listed
+            </li>
+          )}
         </ul>
       </CardContent>
     </Card>

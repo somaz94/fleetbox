@@ -1,6 +1,6 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { detail, targets } from "@/test/fixtures";
+import { detail, dockerDetail, targets } from "@/test/fixtures";
 import { renderAt } from "@/test/render";
 import { http, server } from "@/test/server";
 
@@ -89,4 +89,41 @@ test("a hidden or unknown service reads as not found", async () => {
   renderAt("/services/secret/web/api");
   const alerts = await screen.findAllByRole("alert");
   expect(alerts[0]).toHaveTextContent("Not found, or you hold no role on its target.");
+});
+
+test("folds each instance's details and lists container facts", async () => {
+  renderAt("/services/prod-aws/web/api");
+  const row = (await screen.findByTitle("0123456789abcdef0123")).closest("tr")!;
+  expect(within(row).getByTitle("Ports (host→container)")).toHaveTextContent("80→8080/tcp, 9090");
+  expect(within(row).getByText(/no health check/)).toBeInTheDocument();
+  expect(within(row).getByText(/image built/)).toBeInTheDocument();
+
+  const details = row.nextElementSibling as HTMLElement;
+  expect(within(details).getByText("Details")).toBeInTheDocument();
+  for (const text of ["0.25 vCPU", "512 MiB", "FARGATE", "ap-northeast-2a", "192.0.2.20"]) {
+    expect(within(details).getByText(text)).toBeInTheDocument();
+  }
+  expect(within(details).queryByLabelText("Mounts")).not.toBeInTheDocument();
+});
+
+test("shows a stopped standalone container with its mounts and addresses", async () => {
+  server.use(http.get("/services/{target}/{scope}/{service}", ({ response }) => response(200).json(dockerDetail)));
+  renderAt("/services/host-b/_standalone/redis");
+  const heading = await screen.findByRole("heading", { level: 1 });
+  expect(heading).toHaveTextContent("host-b/redis standalone");
+  expect(heading.textContent).not.toContain("_standalone");
+  expect(await screen.findByText("Stopped")).toBeInTheDocument();
+
+  const row = screen.getByTitle("aaaaaaaaaaaa").closest("tr")!;
+  expect(within(row).getByText((_, el) => el?.tagName === "P" && /^stopped .*ago$/.test(el.textContent ?? ""))).toBeInTheDocument();
+  const details = row.nextElementSibling as HTMLElement;
+  expect(within(details).getByText("unless-stopped")).toBeInTheDocument();
+  expect(within(details).getByText("IP (lan)")).toBeInTheDocument();
+  const mounts = within(details).getByLabelText("Mounts");
+  expect(within(mounts).getByText(/\/data\/redis → \/data/)).toBeInTheDocument();
+  expect(within(mounts).getByText(/\? → \/conf \(ro\)/)).toBeInTheDocument();
+
+  // An instance with nothing beyond its status gets no details row.
+  const bare = screen.getByTitle("bbbbbbbbbbbb").closest("tr")!;
+  expect(bare.nextElementSibling).toBeNull();
 });

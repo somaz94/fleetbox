@@ -15,6 +15,10 @@ export const targets: Schemas["Target"][] = [
     error: "dial tcp 192.0.2.10:22: i/o timeout",
     serviceCount: 1,
     instanceCount: 1,
+    endpoint: [
+      { name: "transport", value: "ssh" },
+      { name: "host", value: "192.0.2.10:22" },
+    ],
   },
   {
     name: "prod-aws",
@@ -27,6 +31,10 @@ export const targets: Schemas["Target"][] = [
     stale: false,
     serviceCount: 2,
     instanceCount: 3,
+    endpoint: [
+      { name: "region", value: "ap-northeast-2" },
+      { name: "clusters", value: "all" },
+    ],
   },
 ];
 
@@ -72,9 +80,24 @@ export const detail: Schemas["ServiceDetail"] = {
       revision: "api:7",
       startedAt: t0,
       restarts: 0,
+      createdAt: t0,
+      cpu: 0.25,
+      memoryMiB: 512,
+      launchType: "FARGATE",
+      zone: "ap-northeast-2a",
+      addresses: [{ ip: "192.0.2.20" }],
       containers: [
-        { name: "app", image: "example/api:1.2", digest: "sha256:0123456789abcdef0123", status: "running", exitCode: 0 },
-        { name: "sidecar", image: "example/proxy:1", status: "exited", exitCode: 137 },
+        {
+          name: "app",
+          image: "example/api:1.2",
+          digest: "sha256:0123456789abcdef0123",
+          status: "running",
+          exitCode: 0,
+          ports: [{ container: 8080, host: 80, protocol: "tcp" }, { container: 9090 }],
+          imageCreated: t0,
+          healthCheck: true,
+        },
+        { name: "sidecar", image: "example/proxy:1", status: "exited", exitCode: 137, healthCheck: false },
       ],
     },
   ],
@@ -166,3 +189,55 @@ export const findings: Schemas["Finding"][] = [
 export const resolvedFindings: Schemas["Finding"][] = [
   { ...findings[1]!, id: 9, summary: "runs 0 of 2 desired", resolvedAt: "2026-01-01T03:00:00Z" },
 ];
+
+const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
+
+// Docker services as a host with years of leftovers shows them: one stopped
+// long ago, one stopped an hour ago, one in compose and running.
+export const dockerServices: Schemas["Service"][] = [
+  {
+    ref: { target: "host-b", scope: "_standalone", name: "old-build" },
+    provider: "docker",
+    status: "down",
+    instances: { running: 0, pending: 0, stopped: 1, unhealthy: 0 },
+    stoppedSince: "2024-03-01T00:00:00Z",
+    stale: false,
+  },
+  {
+    ref: { target: "host-b", scope: "_standalone", name: "redis" },
+    provider: "docker",
+    status: "down",
+    instances: { running: 0, pending: 0, stopped: 1, unhealthy: 0 },
+    stoppedSince: hoursAgo(1),
+    stale: false,
+  },
+  {
+    ref: { target: "host-a", scope: "git", name: "server" },
+    provider: "docker",
+    status: "healthy",
+    instances: { running: 2, pending: 0, stopped: 0, unhealthy: 0 },
+    stale: false,
+  },
+];
+
+export const dockerDetail: Schemas["ServiceDetail"] = {
+  service: dockerServices[1]!,
+  instances: [
+    {
+      id: "aaaaaaaaaaaa",
+      status: "stopped",
+      startedAt: t0,
+      stoppedAt: hoursAgo(1),
+      stopReason: "exited with code 1",
+      restartPolicy: "unless-stopped",
+      addresses: [{ network: "lan", ip: "192.0.2.6" }],
+      mounts: [
+        { type: "bind", source: "/data/redis", destination: "/data", readOnly: false },
+        { type: "volume", destination: "/conf", readOnly: true },
+      ],
+      containers: [{ name: "redis", image: "redis:7", status: "exited", exitCode: 1 }],
+    },
+    { id: "bbbbbbbbbbbb", status: "stopped", containers: [{ name: "redis", image: "redis:7" }] },
+  ],
+  stops: [],
+};

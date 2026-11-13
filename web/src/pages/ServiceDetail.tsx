@@ -1,6 +1,7 @@
-import { useId, useState, type FormEvent } from "react";
+import { Fragment, useId, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useParams } from "react-router";
 import { errorMessage, QueryState } from "@/components/QueryState";
+import { ServiceName } from "@/components/ServiceName";
 import { Ago, InstanceStatusBadge, ServiceStatusBadge, SeverityBadge } from "@/components/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,7 +13,7 @@ import { ApiError, type Schemas } from "@/lib/api";
 import { shortDigest, shortID } from "@/lib/format";
 import { useOperations } from "@/lib/permissions";
 import { useEvents, useFindings, useRefresh, useRestart, useScale, useService, useTargets, type ServiceKey } from "@/lib/queries";
-import { logsHref } from "@/pages/links";
+import { logsHref, serviceLabel } from "@/pages/links";
 
 export function useServiceKey(): ServiceKey {
   const { target = "", scope = "", service = "" } = useParams();
@@ -33,7 +34,7 @@ export function ServiceDetail() {
           <Link to="/services" className="text-muted-foreground hover:underline">
             Services
           </Link>{" "}
-          / {key.target}/{key.scope}/{key.service}
+          / <ServiceName serviceRef={{ target: key.target, scope: key.scope, name: key.service }} />
         </h1>
         <div className="ml-auto flex gap-2">
           <Button variant="outline" size="sm" disabled={refresh.isPending} onClick={() => refresh.mutate()}>
@@ -138,7 +139,7 @@ function OperationDialog({
   const n = Number(count);
   const countValid = count.trim() !== "" && Number.isInteger(n) && n >= 0 && n <= MAX_DESIRED;
   const ready = typed === serviceKey.service && (action === "restart" || countValid) && !mutation.isPending;
-  const name = `${serviceKey.target}/${serviceKey.scope}/${serviceKey.service}`;
+  const name = serviceLabel({ target: serviceKey.target, scope: serviceKey.scope, name: serviceKey.service });
   const hintId = useId();
 
   const submit = (e: FormEvent) => {
@@ -239,7 +240,7 @@ function ServiceFindings({ serviceKey: k }: { serviceKey: ServiceKey }) {
 }
 
 function Overview({ service: s }: { service: Schemas["Service"] }) {
-  const fields: [string, React.ReactNode][] = [
+  const fields: [string, ReactNode][] = [
     ["Status", <ServiceStatusBadge key="s" status={s.status} />],
     ["Provider", s.provider],
     ["Running", s.desired !== undefined ? `${s.instances.running} of ${s.desired}` : String(s.instances.running)],
@@ -248,6 +249,7 @@ function Overview({ service: s }: { service: Schemas["Service"] }) {
   ];
   if (s.revision) fields.push(["Revision", <span key="r" className="font-mono text-xs">{s.revision}</span>]);
   if (s.rollout) fields.push(["Rollout", <span key="o">{s.rollout.state} {s.rollout.startedAt && <Ago at={s.rollout.startedAt} />}</span>]);
+  if (s.stoppedSince) fields.push(["Stopped", <Ago key="t" at={s.stoppedSince} />]);
   return (
     <Card>
       <CardContent className="pt-4">
@@ -302,40 +304,49 @@ function Instances({ serviceKey, instances, logs }: { serviceKey: ServiceKey; in
             </TableHeader>
             <TableBody>
               {instances.map((i) => (
-                <TableRow key={i.id}>
-                  <TableCell className="font-mono text-xs" title={i.id}>
-                    {shortID(i.id)}
-                  </TableCell>
-                  <TableCell>
-                    <InstanceStatusBadge status={i.status} health={i.health} />
-                    {i.stopReason && <p className="mt-1 text-xs text-muted-foreground">{i.stopReason}</p>}
-                  </TableCell>
-                  <TableCell>
-                    <ul className="flex flex-col gap-1">
-                      {i.containers.map((c) => (
-                        <li key={c.name} className="text-xs">
-                          <span className="font-medium">{c.name}</span>{" "}
-                          <span className="font-mono text-muted-foreground" title={c.digest}>
-                            {c.image} {shortDigest(c.digest)}
-                          </span>
-                          {c.exitCode !== undefined && c.status !== "running" && <span> exit {c.exitCode}</span>}
-                        </li>
-                      ))}
-                    </ul>
-                  </TableCell>
-                  <TableCell className="font-mono text-xs">{i.revision ?? ""}</TableCell>
-                  <TableCell>
-                    <Ago at={i.startedAt} />
-                  </TableCell>
-                  <TableCell>{i.restarts ?? ""}</TableCell>
-                  {logs && (
-                    <TableCell>
-                      <Link className="text-sm hover:underline" to={logsHref(serviceKey, i.id)}>
-                        Logs
-                      </Link>
+                <Fragment key={i.id}>
+                  <TableRow>
+                    <TableCell className="font-mono text-xs" title={i.id}>
+                      {shortID(i.id)}
                     </TableCell>
-                  )}
-                </TableRow>
+                    <TableCell>
+                      <InstanceStatusBadge status={i.status} health={i.health} />
+                      {i.stopReason && <p className="mt-1 text-xs text-muted-foreground">{i.stopReason}</p>}
+                    </TableCell>
+                    <TableCell>
+                      <ul className="flex flex-col gap-1">
+                        {i.containers.map((c) => (
+                          <li key={c.name} className="text-xs">
+                            <span className="font-medium">{c.name}</span>{" "}
+                            <span className="font-mono text-muted-foreground" title={c.digest}>
+                              {c.image} {shortDigest(c.digest)}
+                            </span>
+                            {c.exitCode !== undefined && c.status !== "running" && <span> exit {c.exitCode}</span>}
+                            <ContainerFacts container={c} />
+                          </li>
+                        ))}
+                      </ul>
+                    </TableCell>
+                    <TableCell className="font-mono text-xs">{i.revision ?? ""}</TableCell>
+                    <TableCell>
+                      <Ago at={i.startedAt} />
+                      {i.stoppedAt && (
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          stopped <Ago at={i.stoppedAt} />
+                        </p>
+                      )}
+                    </TableCell>
+                    <TableCell>{i.restarts ?? ""}</TableCell>
+                    {logs && (
+                      <TableCell>
+                        <Link className="text-sm hover:underline" to={logsHref(serviceKey, i.id)}>
+                          Logs
+                        </Link>
+                      </TableCell>
+                    )}
+                  </TableRow>
+                  <InstanceDetail instance={i} columns={logs ? 7 : 6} />
+                </Fragment>
               ))}
             </TableBody>
           </Table>
@@ -426,5 +437,66 @@ function Events({ serviceKey }: { serviceKey: ServiceKey }) {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function ContainerFacts({ container: c }: { container: Schemas["Container"] }) {
+  const ports = (c.ports ?? []).map((p) => `${p.host !== undefined ? `${p.host}→` : ""}${p.container}${p.protocol ? `/${p.protocol}` : ""}`);
+  return (
+    <span className="ml-1 text-muted-foreground">
+      {ports.length > 0 && <span title="Ports (host→container)"> · {ports.join(", ")}</span>}
+      {c.healthCheck === false && <span> · no health check</span>}
+      {c.imageCreated && (
+        <span>
+          {" "}
+          · image built <Ago at={c.imageCreated} />
+        </span>
+      )}
+    </span>
+  );
+}
+
+// InstanceDetail folds the facts a provider reports beyond status: where the
+// instance runs, its limits, and what it mounts. Absent facts are not shown.
+function InstanceDetail({ instance: i, columns }: { instance: Schemas["Instance"]; columns: number }) {
+  const fields: [string, ReactNode][] = [];
+  if (i.createdAt) fields.push(["Created", <Ago key="c" at={i.createdAt} />]);
+  if (i.restartPolicy) fields.push(["Restart policy", i.restartPolicy]);
+  if (i.launchType) fields.push(["Launch type", i.launchType]);
+  if (i.zone) fields.push(["Zone", i.zone]);
+  if (i.cpu !== undefined) fields.push(["CPU", `${i.cpu} vCPU`]);
+  if (i.memoryMiB !== undefined) fields.push(["Memory", `${i.memoryMiB} MiB`]);
+  for (const a of i.addresses ?? []) fields.push([a.network ? `IP (${a.network})` : "IP", <code>{a.ip}</code>]);
+  const mounts = i.mounts ?? [];
+  if (fields.length === 0 && mounts.length === 0) return null;
+  return (
+    <TableRow className="hover:bg-transparent">
+      <TableCell colSpan={columns} className="pt-0">
+        <details>
+          <summary className="cursor-pointer text-xs text-muted-foreground" aria-label={`Details of ${shortID(i.id)}`}>
+            Details
+          </summary>
+          <dl className="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 text-xs sm:grid-cols-4">
+            {fields.map(([k, v], n) => (
+              <div key={`${k}-${n}`}>
+                <dt className="text-muted-foreground">{k}</dt>
+                <dd>{v}</dd>
+              </div>
+            ))}
+          </dl>
+          {mounts.length > 0 && (
+            <ul className="mt-2 flex flex-col gap-1 text-xs" aria-label="Mounts">
+              {mounts.map((m, n) => (
+                <li key={`${m.destination}-${n}`} className="font-mono">
+                  {m.source ?? "?"} → {m.destination}
+                  {m.readOnly && " (ro)"}
+                  {m.type && <span className="text-muted-foreground"> {m.type}</span>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </details>
+      </TableCell>
+    </TableRow>
   );
 }

@@ -1,4 +1,5 @@
 import { screen, within } from "@testing-library/react";
+import { dockerServices } from "@/test/fixtures";
 import { renderAt } from "@/test/render";
 import { http, server } from "@/test/server";
 
@@ -53,4 +54,15 @@ test("reports an API error", async () => {
   server.use(http.get("/targets", ({ response }) => response(500).json({ error: { code: "internal", message: "internal error" } })));
   renderAt("/");
   expect(await screen.findByRole("alert")).toHaveTextContent("internal error");
+});
+
+test("leaves long-stopped services out of the attention list", async () => {
+  server.use(http.get("/services", ({ response }) => response(200).json(dockerServices)));
+  renderAt("/");
+  const attention = (await screen.findByText("Needs attention")).closest("div")!.parentElement!;
+  expect(within(attention).getByRole("link", { name: "host-b/redis" })).toHaveAttribute("href", "/services/host-b/_standalone/redis");
+  expect(within(attention).queryByText(/old-build/)).not.toBeInTheDocument();
+  expect(within(attention).getByRole("link", { name: "1 stopped for more than 7 days" })).toHaveAttribute("href", "/services?status=down");
+  // The nav and the summary card both lead to the targets page.
+  expect(screen.getAllByRole("link", { name: "Targets" }).map((a) => a.getAttribute("href"))).toEqual(["/targets", "/targets"]);
 });
