@@ -35,10 +35,9 @@ const (
 	StateResolved = "resolved"
 )
 
-// FindingQuery selects open findings, or the most recently resolved ones.
+// FindingQuery selects open or resolved findings; retention bounds both.
 type FindingQuery struct {
 	State string
-	Limit int // resolved only; 0 means no limit
 }
 
 // StopsSince returns every stop record at or after since, newest first.
@@ -84,12 +83,8 @@ func (s *SQLite) Findings(ctx context.Context, q FindingQuery) ([]model.Finding,
 		return s.findings(ctx, `SELECT `+findingColumns+` FROM findings f
 			WHERE opened_at IS NOT NULL AND resolved_at IS NULL ORDER BY opened_at DESC, id DESC`)
 	case StateResolved:
-		limit := q.Limit
-		if limit <= 0 {
-			limit = -1 // SQLite: no limit
-		}
 		return s.findings(ctx, `SELECT `+findingColumns+` FROM findings f
-			WHERE resolved_at IS NOT NULL ORDER BY resolved_at DESC, id DESC LIMIT ?`, limit)
+			WHERE opened_at IS NOT NULL AND resolved_at IS NOT NULL ORDER BY resolved_at DESC, id DESC`)
 	}
 	return nil, fmt.Errorf("store: unknown finding state %q", q.State)
 }

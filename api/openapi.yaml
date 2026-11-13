@@ -33,6 +33,7 @@ tags:
   - name: services
   - name: operations
   - name: audit
+  - name: findings
 paths:
   /info:
     get:
@@ -219,6 +220,36 @@ paths:
         "400": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "401": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "500": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /findings:
+    get:
+      operationId: listFindings
+      tags: [findings]
+      summary: Findings whose every target the caller holds a role on
+      parameters:
+        - { name: kind, in: query, schema: { $ref: "#/components/schemas/FindingKind" } }
+        - name: target
+          in: query
+          description: Only findings involving this target
+          schema: { type: string }
+        - { name: severity, in: query, schema: { $ref: "#/components/schemas/Severity" } }
+        - name: state
+          in: query
+          description: >
+            open findings, most recently opened first, or the 100 most recently
+            resolved that match the other parameters and that the caller may see.
+            A finding whose kind was switched off is listed as resolved too.
+          schema: { type: string, enum: [open, resolved], default: open }
+      responses:
+        "200":
+          description: Findings
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Finding" }
+        "400": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "500": { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /services/{target}/{scope}/{service}/events:
     parameters:
       - $ref: "#/components/parameters/TargetName"
@@ -354,6 +385,52 @@ components:
           type: integer
           format: int64
           description: Pass as before to read the next page; absent once a page comes back short of limit
+    FindingKind:
+      type: string
+      enum: [drift, stuck, why, hygiene]
+    Finding:
+      type: object
+      required: [id, kind, rule, severity, summary, services, evidence, firstSeen, lastSeen, openedAt]
+      properties:
+        id: { type: integer, format: int64 }
+        kind: { $ref: "#/components/schemas/FindingKind" }
+        rule:
+          type: string
+          description: The rule within the kind, for example below-desired or latest-tag
+        severity: { $ref: "#/components/schemas/Severity" }
+        summary: { type: string }
+        services:
+          type: array
+          description: Every service the finding involves; drift involves one per environment
+          items: { $ref: "#/components/schemas/ServiceRef" }
+        evidence:
+          type: array
+          items: { $ref: "#/components/schemas/Evidence" }
+        firstSeen:
+          type: string
+          format: date-time
+          description: When the condition began, as far as fleetbox can tell
+        lastSeen:
+          type: string
+          format: date-time
+          description: The last evaluation that still saw the condition
+        openedAt:
+          type: string
+          format: date-time
+          description: When the condition had lasted its rule's delay
+        resolvedAt:
+          type: string
+          format: date-time
+          description: Absent while open
+    Evidence:
+      type: object
+      required: [label, value]
+      properties:
+        label: { type: string }
+        value: { type: string }
+        service:
+          description: The service this fact belongs to, when it is one of several
+          allOf: [{ $ref: "#/components/schemas/ServiceRef" }]
     Info:
       type: object
       required: [version, commit, buildDate]

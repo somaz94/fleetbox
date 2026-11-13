@@ -439,7 +439,7 @@ func TestAuthRequired(t *testing.T) {
 		{"GET", "/api/v1/services/prod/web/api"}, {"POST", "/api/v1/services/prod/web/api/refresh"},
 		{"GET", "/api/v1/services/prod/web/api/events"}, {"GET", "/api/v1/services/prod/web/api/instances/t1/logs"},
 		{"POST", "/api/v1/services/prod/web/api/restart"}, {"POST", "/api/v1/services/prod/web/api/scale"},
-		{"GET", "/api/v1/audit"}, {"GET", "/api/v1/nope"},
+		{"GET", "/api/v1/audit"}, {"GET", "/api/v1/findings"}, {"GET", "/api/v1/nope"},
 	} {
 		wantError(t, h.do(t, tt.method, tt.path), http.StatusUnauthorized, ErrorErrorCodeUnauthorized)
 	}

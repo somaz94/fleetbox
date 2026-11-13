@@ -179,6 +179,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/findings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Findings whose every target the caller holds a role on */
+        get: operations["listFindings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/services/{target}/{scope}/{service}/events": {
         parameters: {
             query?: never;
@@ -267,6 +284,46 @@ export interface components {
              * @description Pass as before to read the next page; absent once a page comes back short of limit
              */
             next?: number;
+        };
+        /** @enum {string} */
+        FindingKind: "drift" | "stuck" | "why" | "hygiene";
+        Finding: {
+            /** Format: int64 */
+            id: number;
+            kind: components["schemas"]["FindingKind"];
+            /** @description The rule within the kind, for example below-desired or latest-tag */
+            rule: string;
+            severity: components["schemas"]["Severity"];
+            summary: string;
+            /** @description Every service the finding involves; drift involves one per environment */
+            services: components["schemas"]["ServiceRef"][];
+            evidence: components["schemas"]["Evidence"][];
+            /**
+             * Format: date-time
+             * @description When the condition began, as far as fleetbox can tell
+             */
+            firstSeen: string;
+            /**
+             * Format: date-time
+             * @description The last evaluation that still saw the condition
+             */
+            lastSeen: string;
+            /**
+             * Format: date-time
+             * @description When the condition had lasted its rule's delay
+             */
+            openedAt: string;
+            /**
+             * Format: date-time
+             * @description Absent while open
+             */
+            resolvedAt?: string;
+        };
+        Evidence: {
+            label: string;
+            value: string;
+            /** @description The service this fact belongs to, when it is one of several */
+            service?: components["schemas"]["ServiceRef"];
         };
         Info: {
             version: string;
@@ -936,6 +993,60 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuditPage"];
+                };
+            };
+            /** @description Error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listFindings: {
+        parameters: {
+            query?: {
+                kind?: components["schemas"]["FindingKind"];
+                /** @description Only findings involving this target */
+                target?: string;
+                severity?: components["schemas"]["Severity"];
+                /** @description open findings, most recently opened first, or the 100 most recently resolved that match the other parameters and that the caller may see. A finding whose kind was switched off is listed as resolved too. */
+                state?: "open" | "resolved";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Findings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Finding"][];
                 };
             };
             /** @description Error */

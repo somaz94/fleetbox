@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/somaz94/fleetbox/internal/auth"
@@ -26,6 +27,9 @@ const (
 	maxDesired   = 1000
 	defaultAudit = 100
 	maxAudit     = 500
+
+	// resolvedFindings is how many recently resolved findings a caller can list.
+	resolvedFindings = 100
 
 	// An operation outlives a caller who hangs up, since the provider may
 	// already have applied it, but not forever.
@@ -45,12 +49,24 @@ type AuditLog interface {
 	Audit(ctx context.Context, q store.AuditQuery) ([]store.AuditEntry, error)
 }
 
+// FindingReader is the part of the store findings are read from.
+type FindingReader interface {
+	Findings(ctx context.Context, q store.FindingQuery) ([]model.Finding, error)
+}
+
+// Records is everything the API keeps in, or reads from, the store.
+type Records interface {
+	AuditLog
+	FindingReader
+}
+
 // Server implements StrictServerInterface.
 type Server struct {
-	core  *core.Core
-	auth  *auth.Service
-	audit AuditLog
-	log   *slog.Logger
+	core     *core.Core
+	auth     *auth.Service
+	audit    AuditLog
+	findings FindingReader
+	log      *slog.Logger
 }
 
 var _ StrictServerInterface = (*Server)(nil)
@@ -58,8 +74,8 @@ var _ StrictServerInterface = (*Server)(nil)
 // NewHandler returns the /api/v1 handler. Errors of every kind, including
 // unknown routes, malformed parameters and a missing identity, answer with the
 // Error schema.
-func NewHandler(c *core.Core, a *auth.Service, audit AuditLog, log *slog.Logger) http.Handler {
-	s := &Server{core: c, auth: a, audit: audit, log: log}
+func NewHandler(c *core.Core, a *auth.Service, records Records, log *slog.Logger) http.Handler {
+	s := &Server{core: c, auth: a, audit: records, findings: records, log: log}
 	mux := http.NewServeMux()
 	badRequest := func(w http.ResponseWriter, _ *http.Request, err error) {
 		writeError(w, http.StatusBadRequest, ErrorErrorCodeBadRequest, err.Error())
@@ -420,10 +436,86 @@ func (s *Server) ListAudit(ctx context.Context, req ListAuditRequestObject) (Lis
 	return out, nil
 }
 
+// ListFindings answers only findings whose every target the caller holds a
+// role on: drift spans environments, and one hidden target is enough to hide it.
+func (s *Server) ListFindings(ctx context.Context, req ListFindingsRequestObject) (ListFindingsResponseObject, error) {
+	p := req.Params
+	switch {
+	case p.Kind != nil && !p.Kind.Valid():
+		return ListFindings400JSONResponse(errorBody(ErrorErrorCodeBadRequest, fmt.Sprintf("unknown kind %q", *p.Kind))), nil
+	case p.Severity != nil && !p.Severity.Valid():
+		return ListFindings400JSONResponse(errorBody(ErrorErrorCodeBadRequest, fmt.Sprintf("unknown severity %q", *p.Severity))), nil
+	case p.State != nil && !p.State.Valid():
+		return ListFindings400JSONResponse(errorBody(ErrorErrorCodeBadRequest, fmt.Sprintf("unknown state %q", *p.State))), nil
+	}
+	// The resolved cap applies after filtering, so it counts only what the caller asked for and may see.
+	q, limit := store.FindingQuery{State: store.StateOpen}, 0
+	if p.State != nil && *p.State == ListFindingsParamsStateResolved {
+		q.State, limit = store.StateResolved, resolvedFindings
+	}
+	fs, err := s.findings.Findings(ctx, q)
+	if err != nil {
+		e, _ := s.classify(err)
+		return ListFindings500JSONResponse(e), nil
+	}
+	out := ListFindings200JSONResponse{}
+	for _, f := range fs {
+		targets := f.Targets()
+		switch {
+		case p.Kind != nil && f.Kind != string(*p.Kind),
+			p.Severity != nil && f.Severity != string(*p.Severity),
+			p.Target != nil && !slices.Contains(targets, *p.Target),
+			!s.visibleAll(ctx, targets):
+			continue
+		}
+		out = append(out, toFinding(f))
+		if len(out) == limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (s *Server) visibleAll(ctx context.Context, targets []string) bool {
+	if len(targets) == 0 {
+		return false
+	}
+	for _, t := range targets {
+		if !s.visible(ctx, t) {
+			return false
+		}
+	}
+	return true
+}
+
+func toFinding(f model.Finding) Finding {
+	out := Finding{Id: f.ID, Kind: FindingKind(f.Kind), Rule: f.Rule, Severity: Severity(f.Severity), Summary: f.Summary,
+		Services: make([]ServiceRef, 0, len(f.Services)), Evidence: make([]Evidence, 0, len(f.Evidence)),
+		FirstSeen: f.FirstSeen, LastSeen: f.LastSeen, ResolvedAt: f.ResolvedAt}
+	if f.OpenedAt != nil {
+		out.OpenedAt = *f.OpenedAt
+	}
+	for _, r := range f.Services {
+		out.Services = append(out.Services, toServiceRef(r))
+	}
+	for _, e := range f.Evidence {
+		ev := Evidence{Label: e.Label, Value: e.Value}
+		if e.Service != nil {
+			ev.Service = model.Ptr(toServiceRef(*e.Service))
+		}
+		out.Evidence = append(out.Evidence, ev)
+	}
+	return out
+}
+
+func toServiceRef(r model.ServiceRef) ServiceRef {
+	return ServiceRef{Target: r.Target, Scope: r.Scope, Name: r.Name}
+}
+
 func toAuditEntry(e store.AuditEntry) AuditEntry {
 	return AuditEntry{
 		Id: e.ID, Time: e.Time, User: e.User, Subject: ptr(e.Subject),
-		Service: ServiceRef{Target: e.Service.Target, Scope: e.Service.Scope, Name: e.Service.Name},
+		Service: toServiceRef(e.Service),
 		Action:  AuditEntryAction(e.Action), Params: ptr(e.Params), Result: AuditEntryResult(e.Result), Error: ptr(e.Error),
 	}
 }
@@ -480,7 +572,7 @@ func toTarget(t inventory.TargetState) Target {
 
 func toService(v core.ServiceView) Service {
 	s := Service{
-		Ref:      ServiceRef{Target: v.Ref.Target, Scope: v.Ref.Scope, Name: v.Ref.Name},
+		Ref:      toServiceRef(v.Ref),
 		Provider: v.Provider, Status: ServiceStatus(v.Status), Stale: v.Stale,
 		Desired: v.Desired, Running: v.Running, Pending: v.Pending, Revision: ptr(v.Revision),
 		Instances: InstanceCounts{Running: v.Counts.Running, Pending: v.Counts.Pending, Stopped: v.Counts.Stopped, Unhealthy: v.Counts.Unhealthy},

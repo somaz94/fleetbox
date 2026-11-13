@@ -69,7 +69,7 @@ func TestFindingLifecycle(t *testing.T) {
 	if err := s.SaveFindings(ctx, FindingChanges{At: t1, Resolve: []int64{open.ID, open.ID}}); err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := s.Findings(ctx, FindingQuery{State: StateResolved, Limit: 5})
+	resolved, err := s.Findings(ctx, FindingQuery{State: StateResolved})
 	if err != nil || len(resolved) != 1 || resolved[0].Summary != "runs 0 of 2 desired" || !resolved[0].ResolvedAt.Equal(t1) {
 		t.Fatalf("resolved = %+v, %v", resolved, err)
 	}
