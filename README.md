@@ -2,7 +2,7 @@
 
 A web console for containers that run outside Kubernetes: Amazon ECS services and plain Docker hosts in one view, with what runs, which image digest, whether it is healthy and why it last stopped. It runs as one service in a Kubernetes cluster and is the only component holding the cloud and host credentials.
 
-> **Status**: early releases. The provider layer (ECS, Docker over SSH), the read API, OIDC sign-in with group-to-target roles, the console, and restart and scale for operators with an audit log are released; findings are next. Releases are listed on the [releases page](https://github.com/somaz94/fleetbox/releases), and the roadmap is in [docs/DESIGN.md](docs/DESIGN.md#roadmap).
+> **Status**: early releases. The provider layer (ECS, Docker over SSH), the read API, OIDC sign-in with group-to-target roles, the console, restart and scale for operators with an audit log, and findings with Slack notifications are released. Releases are listed on the [releases page](https://github.com/somaz94/fleetbox/releases), and the roadmap is in [docs/DESIGN.md](docs/DESIGN.md#roadmap).
 
 <br/>
 
@@ -45,9 +45,16 @@ Portainer and its peers manage Docker hosts but not ECS; e1s and the AWS console
 
 A target is read-only unless its configuration says `readonly: false`. An ECS target also needs `operateRoleArn`, a role allowed `ecs:UpdateService` that trusts the server's base identity rather than the read role, before it can be restarted or scaled; Docker targets can be restarted but not scaled. Only users holding the `operator` role on a target see its operations, and every request is recorded in the audit log.
 
+Findings (image drift across environments, stuck deployments, failed stops and image hygiene) are evaluated on an interval and need no configuration; the optional `findings` block tunes their thresholds. Slack routes under `notify.slack` announce findings as they open and resolve, each reading its incoming webhook URL from a file. A finding is shown, and sent to a route, only when every target it involves is covered.
+
 <br/>
 
 ## Upgrading
+
+### From v0.3
+
+- The store gains a schema migration on first start. A v0.3 binary refuses to open the migrated database, so back up the volume before upgrading if you may need to roll back.
+- Findings appear on their own after the first evaluations; Slack notifications stay off until routes are configured.
 
 ### From v0.2
 
