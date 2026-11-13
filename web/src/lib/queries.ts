@@ -1,7 +1,7 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { client, unwrap, type Schemas } from "@/lib/api";
 
-// Lists and details read the server's cache, which the poller keeps current.
+// Lists, details and findings read state the server refreshes on its own interval.
 export const REFETCH_MS = 15_000;
 
 export type ServiceKey = { target: string; scope: string; service: string };
@@ -25,6 +25,23 @@ export function useServices(filter: ServiceFilter = {}) {
   return useQuery({
     queryKey: ["services", filter],
     queryFn: () => unwrap(client.GET("/services", { params: { query: filter } })),
+    refetchInterval: REFETCH_MS,
+  });
+}
+
+export const findingKinds: Schemas["FindingKind"][] = ["drift", "stuck", "why", "hygiene"];
+
+export type FindingFilter = {
+  kind?: Schemas["FindingKind"];
+  target?: string;
+  severity?: Schemas["Severity"];
+  state?: "open" | "resolved";
+};
+
+export function useFindings(filter: FindingFilter = {}) {
+  return useQuery({
+    queryKey: ["findings", filter],
+    queryFn: () => unwrap(client.GET("/findings", { params: { query: filter } })),
     refetchInterval: REFETCH_MS,
   });
 }

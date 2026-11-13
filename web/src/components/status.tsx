@@ -35,3 +35,9 @@ export function TargetStateBadge({ target }: { target: Schemas["Target"] }) {
 export function Ago({ at }: { at?: string }) {
   return <time title={absolute(at)}>{ago(at)}</time>;
 }
+
+const severityTone: Record<Schemas["Severity"], Tone> = { warning: "warn", info: "neutral" };
+
+export function SeverityBadge({ severity }: { severity: Schemas["Severity"] }) {
+  return <Badge tone={severityTone[severity]}>{severity}</Badge>;
+}

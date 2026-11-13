@@ -1,11 +1,11 @@
 import { Link } from "react-router";
-import { QueryState } from "@/components/QueryState";
+import { errorMessage, QueryState } from "@/components/QueryState";
 import { Ago, ServiceStatusBadge, TargetStateBadge } from "@/components/status";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { Schemas } from "@/lib/api";
-import { useServices, useTargets } from "@/lib/queries";
+import { findingKinds, useFindings, useServices, useTargets } from "@/lib/queries";
 import { serviceHref } from "@/pages/links";
 
 const statuses: Schemas["ServiceStatus"][] = ["healthy", "degraded", "down", "idle"];
@@ -38,7 +38,7 @@ function Summary({ targets, services }: { targets: Schemas["Target"][]; services
   const stale = targets.filter((t) => t.stale || (!t.refreshedAt && t.error)).length;
   const instances = targets.reduce((n, t) => n + t.instanceCount, 0);
   return (
-    <div className="grid gap-4 sm:grid-cols-3">
+    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
       <Card>
         <CardHeader>
           <CardTitle>Targets</CardTitle>
@@ -74,7 +74,46 @@ function Summary({ targets, services }: { targets: Schemas["Target"][]; services
           <p className="text-2xl font-semibold">{instances}</p>
         </CardContent>
       </Card>
+      <FindingsCard />
     </div>
+  );
+}
+
+// FindingsCard reads on its own, so a slow or failing findings read never holds up the dashboard.
+function FindingsCard() {
+  const findings = useFindings();
+  const list = findings.data ?? [];
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          <Link to="/findings" className="hover:underline">
+            Open findings
+          </Link>
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {findings.isError ? (
+          <p role="alert" className="text-sm text-destructive">
+            {errorMessage(findings.error)}
+          </p>
+        ) : (
+          <>
+            <p className="text-2xl font-semibold">{findings.isPending ? "…" : list.length}</p>
+            <div className="mt-1 flex flex-wrap gap-2">
+              {findingKinds.map((k) => {
+                const n = list.filter((f) => f.kind === k).length;
+                return n > 0 ? (
+                  <Link key={k} to={`/findings?kind=${k}`} aria-label={`${n} ${k}`}>
+                    <Badge>{k}</Badge> <span className="text-sm">{n}</span>
+                  </Link>
+                ) : null;
+              })}
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

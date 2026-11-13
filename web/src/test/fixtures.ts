@@ -117,3 +117,52 @@ export const audit: Schemas["AuditEntry"][] = [
     error: 'forbidden: restart needs the operator role on target "prod-aws"',
   },
 ];
+
+export const findings: Schemas["Finding"][] = [
+  {
+    id: 3,
+    kind: "drift",
+    rule: "digest",
+    severity: "warning",
+    summary: "api runs different images in dev, prod",
+    services: [
+      { target: "dev-aws", scope: "web", name: "api" },
+      { target: "prod-aws", scope: "web", name: "api" },
+    ],
+    evidence: [
+      { label: "dev", value: "sha256:new", service: { target: "dev-aws", scope: "web", name: "api" } },
+      { label: "prod", value: "sha256:old", service: { target: "prod-aws", scope: "web", name: "api" } },
+    ],
+    firstSeen: t0,
+    lastSeen: "2026-01-01T02:00:00Z",
+    openedAt: "2026-01-01T01:00:00Z",
+  },
+  {
+    id: 2,
+    kind: "stuck",
+    rule: "below-desired",
+    severity: "warning",
+    summary: "runs 1 of 2 desired",
+    services: [{ target: "prod-aws", scope: "web", name: "api" }],
+    evidence: [],
+    firstSeen: t0,
+    lastSeen: "2026-01-01T02:00:00Z",
+    openedAt: "2026-01-01T00:15:00Z",
+  },
+  {
+    id: 1,
+    kind: "hygiene",
+    rule: "latest-tag",
+    severity: "info",
+    summary: "runs images tagged latest",
+    services: [{ target: "build-host-1", scope: "ci", name: "runner" }],
+    evidence: [{ label: "image", value: "example/runner:latest" }],
+    firstSeen: t0,
+    lastSeen: t0,
+    openedAt: t0,
+  },
+];
+
+export const resolvedFindings: Schemas["Finding"][] = [
+  { ...findings[1]!, id: 9, summary: "runs 0 of 2 desired", resolvedAt: "2026-01-01T03:00:00Z" },
+];

@@ -1,42 +1,27 @@
-import { Link, useSearchParams } from "react-router";
+import { Link } from "react-router";
 import { QueryState } from "@/components/QueryState";
 import { ServiceStatusBadge } from "@/components/status";
 import { Badge } from "@/components/ui/badge";
 import { Input, NativeSelect } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { Schemas } from "@/lib/api";
+import { oneOf, useFilterParams } from "@/lib/params";
 import { useServices, useTargets, type ServiceFilter } from "@/lib/queries";
 import { serviceHref } from "@/pages/links";
 
 const statuses: Schemas["ServiceStatus"][] = ["healthy", "degraded", "down", "idle"];
 
-function isStatus(s: string | null): s is Schemas["ServiceStatus"] {
-  return statuses.includes(s as Schemas["ServiceStatus"]);
-}
-
 export function Services() {
-  const [params, setParams] = useSearchParams();
-  const status = params.get("status");
+  const [params, set] = useFilterParams();
   const filter: ServiceFilter = {
     target: params.get("target") || undefined,
     provider: params.get("provider") || undefined,
-    status: isStatus(status) ? status : undefined,
+    status: oneOf(statuses, params.get("status")),
     q: params.get("q") || undefined,
   };
   const targets = useTargets();
   const services = useServices(filter);
   const providers = [...new Set((targets.data ?? []).map((t) => t.provider))].sort();
-
-  const set = (key: string, value: string) =>
-    setParams(
-      (prev) => {
-        const next = new URLSearchParams(prev);
-        if (value) next.set(key, value);
-        else next.delete(key);
-        return next;
-      },
-      { replace: true },
-    );
 
   return (
     <div className="flex flex-col gap-4">

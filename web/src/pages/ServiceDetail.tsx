@@ -1,7 +1,7 @@
 import { useId, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router";
 import { errorMessage, QueryState } from "@/components/QueryState";
-import { Ago, InstanceStatusBadge, ServiceStatusBadge } from "@/components/status";
+import { Ago, InstanceStatusBadge, ServiceStatusBadge, SeverityBadge } from "@/components/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,7 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { ApiError, type Schemas } from "@/lib/api";
 import { shortDigest, shortID } from "@/lib/format";
 import { useOperations } from "@/lib/permissions";
-import { useEvents, useRefresh, useRestart, useScale, useService, useTargets, type ServiceKey } from "@/lib/queries";
+import { useEvents, useFindings, useRefresh, useRestart, useScale, useService, useTargets, type ServiceKey } from "@/lib/queries";
 import { logsHref } from "@/pages/links";
 
 export function useServiceKey(): ServiceKey {
@@ -56,6 +56,7 @@ export function ServiceDetail() {
         {(d) => (
           <>
             <Overview service={d.service} />
+            <ServiceFindings serviceKey={key} />
             <Instances serviceKey={key} instances={d.instances} logs={target?.capabilities.logs ?? false} />
             <Stops stops={d.stops} />
           </>
@@ -194,6 +195,46 @@ function OperationDialog({
         </div>
       </form>
     </Dialog>
+  );
+}
+
+function ServiceFindings({ serviceKey: k }: { serviceKey: ServiceKey }) {
+  const findings = useFindings({ target: k.target });
+  const mine = (findings.data ?? []).filter((f) =>
+    f.services.some((r) => r.target === k.target && r.scope === k.scope && r.name === k.service),
+  );
+  // An empty section reads as "no findings", so a failed first read says so instead.
+  if (findings.isError && !findings.data) {
+    return (
+      <p role="alert" className="text-sm text-destructive">
+        Findings could not be read: {errorMessage(findings.error)}
+      </p>
+    );
+  }
+  if (mine.length === 0) return null;
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center">
+        <CardTitle>Findings</CardTitle>
+        <Link to={`/findings?target=${encodeURIComponent(k.target)}`} className="ml-auto text-sm text-muted-foreground hover:underline">
+          All on {k.target}
+        </Link>
+      </CardHeader>
+      <CardContent>
+        <ul className="flex flex-col gap-2 text-sm">
+          {mine.map((f) => (
+            <li key={f.id} className="flex flex-wrap items-center gap-2">
+              <Badge title={f.rule}>{f.kind}</Badge>
+              <SeverityBadge severity={f.severity} />
+              <span>{f.summary}</span>
+              <span className="text-muted-foreground">
+                since <Ago at={f.openedAt} />
+              </span>
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
   );
 }
 
