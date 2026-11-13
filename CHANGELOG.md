@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.5.0](https://github.com/somaz94/fleetbox/compare/v0.4.0...v0.5.0) (2026-11-13)
+
+### Features
+
+- add targets page, instance detail and folded stopped services ([bc3aa31](https://github.com/somaz94/fleetbox/commit/bc3aa31645822f13d63b3a34b02ec0606d5d06e3))
+- add instance detail, target endpoint and stoppedSince to the API ([fb74874](https://github.com/somaz94/fleetbox/commit/fb74874fbec7d6d91ffbc0f9071e2a4d712f774a))
+- report instance detail and target endpoint from providers ([3db3478](https://github.com/somaz94/fleetbox/commit/3db347876d79c09f4afbaeae798c636e37ae2990))
+- add dockerPath option for hosts without docker on the SSH PATH ([ce043c3](https://github.com/somaz94/fleetbox/commit/ce043c36d8de8f4919f192b5125a1be8e6e3bad6))
+
+### Documentation
+
+- document Docker access and upgrading from v0.4 ([fb7fc26](https://github.com/somaz94/fleetbox/commit/fb7fc2653c99332c26229f435e1b38a630dbcb68))
+- design instance detail, target endpoints and the v0.5 console ([8c628f7](https://github.com/somaz94/fleetbox/commit/8c628f7517e8a7bb11b541d24d717537fb71257d))
+
+### Chores
+
+- bump version to v0.5.0 ([f87d9cd](https://github.com/somaz94/fleetbox/commit/f87d9cd6e5ea6cc0a71c930931203315244b3266))
+
+### Contributors
+
+- somaz
+
+<br/>
+
 ## [v0.4.0](https://github.com/somaz94/fleetbox/compare/v0.3.0...v0.4.0) (2026-11-13)
 
 ### Features
