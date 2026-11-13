@@ -63,7 +63,8 @@ func (f Finding) Targets() []string {
 }
 
 // FindingEvent is one open or resolve transition. Its finding is as stored
-// now, except the summary and severity, which are as they were at the transition.
+// now, except the summary, severity and services, which are as they were at
+// the transition.
 type FindingEvent struct {
 	ID         int64
 	Transition string

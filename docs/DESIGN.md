@@ -334,13 +334,13 @@ A finding is a condition fleetbox noticed and keeps track of. An evaluator in `i
 - A target whose last refresh failed is not judged: a finding involving it stays as it was until the target answers again, so an unreachable host does not resolve and reopen everything on it.
 - A field a provider cannot supply decides nothing. An ECS image's age would need the registry, so the image-age rule skips ECS; a container whose health check is unknown is not reported as lacking one.
 - A finding is shown to a caller only if they hold a role on every target it involves, so drift between production and development does not reveal production digests to someone who sees development only.
-- Thresholds are configuration.
+- Thresholds are configuration. Switching a kind off closes its open findings without a notification; the console lists them as resolved.
 
 <br/>
 
 ## Notifications
 
-- Slack incoming webhooks, configured as routes. Each route names the targets (globs) and kinds it wants and the file holding its webhook URL. A finding goes to a route when every target it involves matches.
+- Slack incoming webhooks, configured as routes. Each route names the targets (globs) and kinds it wants and the file holding its webhook URL. A transition goes to a route when every target the finding involved at that transition matches, so a finding whose services change while it is open can reach a route on only one of its two transitions.
 - A message is sent when a finding opens and when it resolves, and for nothing else. Operations are recorded in the audit log, not announced.
 - Delivery reads the store's transitions in order, and each route keeps its own cursor there, moved only after Slack accepts the message. A failed delivery is retried with backoff and never holds up the evaluator; a restart resumes where delivery stopped. A new route starts at the latest transition, so enabling one does not replay history.
 - Delivery is at least once: a crash or a timeout after Slack accepted a message, before the cursor moved, sends that message again. Transitions are kept as long as stop history, so a route failing for longer loses the oldest ones.

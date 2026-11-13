@@ -148,7 +148,8 @@ var migrations = []string{
 		transition TEXT    NOT NULL,
 		at         INTEGER NOT NULL,
 		severity   TEXT    NOT NULL,
-		summary    TEXT    NOT NULL
+		summary    TEXT    NOT NULL,
+		services   TEXT    NOT NULL
 	);
 	CREATE INDEX finding_events_by_finding ON finding_events (finding);
 	CREATE TABLE notify_cursors (

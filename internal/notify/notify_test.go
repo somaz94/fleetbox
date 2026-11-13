@@ -449,3 +449,33 @@ func TestPendingPositionIsRecordedLater(t *testing.T) {
 		t.Fatalf("cursor %d, sent %d", cursor, len(sl.sent()))
 	}
 }
+
+// Each transition is routed by the services it had when it happened, so a
+// notifier that falls behind routes as a prompt one would: the open went out
+// on dev and prod, the resolve on prod alone.
+func TestTransitionsRouteByTheirOwnServices(t *testing.T) {
+	both, prodOnly := newSlack(t), newSlack(t)
+	st := openStore(t)
+	ctx := context.Background()
+	n, _, _ := newNotifier(t, st,
+		config.SlackRoute{Name: "both", WebhookURLFile: webhookFile(t, both.srv.URL+secretPath), Targets: []string{"dev", "prod"}},
+		config.SlackRoute{Name: "prod", WebhookURLFile: webhookFile(t, prodOnly.srv.URL+secretPath), Targets: []string{"prod"}})
+	n.Deliver(ctx)
+	id := open(t, st, "drift", model.FindingDrift, "dev", "prod")
+	active, _ := st.ActiveFindings(ctx)
+	f := active[0]
+	f.Services = f.Services[1:] // dev scaled to zero; prod alone is left
+	if err := st.SaveFindings(ctx, store.FindingChanges{At: t0, Save: []store.FindingSave{{Finding: f}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveFindings(ctx, store.FindingChanges{At: t0, Resolve: []int64{id}}); err != nil {
+		t.Fatal(err)
+	}
+	n.Deliver(ctx)
+	if got := both.sent(); len(got) != 2 || !strings.HasPrefix(got[1], "Resolved") {
+		t.Fatalf("both = %v", got)
+	}
+	if got := prodOnly.sent(); len(got) != 1 || !strings.HasPrefix(got[0], "Resolved") {
+		t.Fatalf("prod = %v", got)
+	}
+}

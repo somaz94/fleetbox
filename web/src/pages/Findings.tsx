@@ -1,5 +1,6 @@
 import { Fragment, useState } from "react";
 import { Link } from "react-router";
+import { FilterSelect } from "@/components/FilterSelect";
 import { QueryState } from "@/components/QueryState";
 import { Ago, SeverityBadge } from "@/components/status";
 import { Badge } from "@/components/ui/badge";
@@ -8,10 +9,8 @@ import { NativeSelect } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { Schemas } from "@/lib/api";
 import { oneOf, useFilterParams } from "@/lib/params";
-import { findingKinds, useFindings, useTargets, type FindingFilter } from "@/lib/queries";
-import { serviceHref } from "@/pages/links";
-
-const severities: Schemas["Severity"][] = ["warning", "info"];
+import { findingKinds, severities, useFindings, useTargets, type FindingFilter } from "@/lib/queries";
+import { serviceHref, serviceLabel } from "@/pages/links";
 
 export function Findings() {
   const [params, set] = useFilterParams();
@@ -33,30 +32,15 @@ export function Findings() {
           <option value="">Open</option>
           <option value="resolved">Recently resolved</option>
         </NativeSelect>
-        <NativeSelect aria-label="Kind" value={filter.kind ?? ""} onChange={(e) => set("kind", e.target.value)}>
-          <option value="">All kinds</option>
-          {findingKinds.map((k) => (
-            <option key={k} value={k}>
-              {k}
-            </option>
-          ))}
-        </NativeSelect>
-        <NativeSelect aria-label="Severity" value={filter.severity ?? ""} onChange={(e) => set("severity", e.target.value)}>
-          <option value="">Any severity</option>
-          {severities.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </NativeSelect>
-        <NativeSelect aria-label="Target" value={filter.target ?? ""} onChange={(e) => set("target", e.target.value)}>
-          <option value="">All targets</option>
-          {(targets.data ?? []).map((t) => (
-            <option key={t.name} value={t.name}>
-              {t.name}
-            </option>
-          ))}
-        </NativeSelect>
+        <FilterSelect label="Kind" all="All kinds" value={filter.kind} values={findingKinds} onChange={(v) => set("kind", v)} />
+        <FilterSelect label="Severity" all="Any severity" value={filter.severity} values={severities} onChange={(v) => set("severity", v)} />
+        <FilterSelect
+          label="Target"
+          all="All targets"
+          value={filter.target}
+          values={(targets.data ?? []).map((t) => t.name)}
+          onChange={(v) => set("target", v)}
+        />
       </div>
       <QueryState query={findings}>
         {(list) =>
@@ -126,7 +110,7 @@ function FindingRow({ finding: f, resolved }: { finding: Schemas["Finding"]; res
                   <dd className="break-all font-mono text-xs">
                     {e.service && (
                       <Link className="mr-2 font-sans hover:underline" to={serviceHref(e.service)}>
-                        {e.service.target}/{e.service.scope}/{e.service.name}
+                        {serviceLabel(e.service)}
                       </Link>
                     )}
                     {e.value}
@@ -147,7 +131,7 @@ function ServiceLinks({ refs }: { refs: Schemas["ServiceRef"][] }) {
       {refs.map((r) => (
         <li key={serviceHref(r)}>
           <Link className="hover:underline" to={serviceHref(r)}>
-            {r.target}/{r.scope}/{r.name}
+            {serviceLabel(r)}
           </Link>
         </li>
       ))}

@@ -16,7 +16,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"path"
 	"slices"
 	"strings"
 	"time"
@@ -187,7 +186,7 @@ func (s *Service) Role(p Principal, target string) string {
 		if best == config.RoleOperator {
 			break
 		}
-		if !slices.Contains(p.Groups, r.Group) || !matchesAny(r.Targets, target) {
+		if !slices.Contains(p.Groups, r.Group) || !config.MatchTarget(r.Targets, target) {
 			continue
 		}
 		if r.Role == config.RoleOperator || best == "" {
@@ -195,15 +194,6 @@ func (s *Service) Role(p Principal, target string) string {
 		}
 	}
 	return best
-}
-
-func matchesAny(globs []string, target string) bool {
-	for _, g := range globs {
-		if ok, _ := path.Match(g, target); ok {
-			return true
-		}
-	}
-	return false
 }
 
 // CheckCSRF accepts a state-changing request only with the CSRF header and an

@@ -240,3 +240,21 @@ func TestParseNotify(t *testing.T) {
 		t.Fatalf("route = %+v", r)
 	}
 }
+
+func TestMatchTarget(t *testing.T) {
+	for _, tt := range []struct {
+		globs  []string
+		target string
+		want   bool
+	}{
+		{[]string{"prod-*"}, "prod-aws", true},
+		{[]string{"dev-*", "prod"}, "prod", true},
+		{[]string{"prod-*"}, "dev-aws", false},
+		{nil, "prod", false},
+		{[]string{"["}, "prod", false},
+	} {
+		if got := MatchTarget(tt.globs, tt.target); got != tt.want {
+			t.Errorf("MatchTarget(%v, %q) = %v", tt.globs, tt.target, got)
+		}
+	}
+}

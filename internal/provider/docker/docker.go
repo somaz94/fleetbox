@@ -303,7 +303,7 @@ func mapContainer(ref model.ServiceRef, s containerSummary, cj containerJSON, im
 func stopReason(cj containerJSON) string {
 	parts := []string{fmt.Sprintf("exited with code %d", cj.State.ExitCode)}
 	if cj.State.OOMKilled {
-		parts = append(parts, "OOMKilled")
+		parts = append(parts, model.ReasonOOMKilled)
 	}
 	if cj.State.Error != "" {
 		parts = append(parts, cj.State.Error)

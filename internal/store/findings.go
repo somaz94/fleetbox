@@ -108,10 +108,10 @@ func (s *SQLite) findings(ctx context.Context, query string, args ...any) ([]mod
 }
 
 // FindingEvents returns transitions after the given event id, oldest first.
-// Each carries its finding as stored now, with the summary and severity it
-// had at the transition.
+// Each carries its finding as stored now, with the summary, severity and
+// services it had at the transition, so a route matches what the message says.
 func (s *SQLite) FindingEvents(ctx context.Context, after int64, limit int) ([]model.FindingEvent, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT e.id, e.transition, e.at, e.severity, e.summary, `+findingColumns+`
+	rows, err := s.db.QueryContext(ctx, `SELECT e.id, e.transition, e.at, e.severity, e.summary, e.services, `+findingColumns+`
 		FROM finding_events e JOIN findings f ON f.id = e.finding WHERE e.id > ? ORDER BY e.id LIMIT ?`, after, limit)
 	if err != nil {
 		return nil, err
@@ -120,13 +120,16 @@ func (s *SQLite) FindingEvents(ctx context.Context, after int64, limit int) ([]m
 	out := []model.FindingEvent{}
 	for rows.Next() {
 		var (
-			ev                model.FindingEvent
-			at                int64
-			severity, summary string
+			ev                          model.FindingEvent
+			at                          int64
+			severity, summary, services string
 		)
-		f, err := scanFinding(rows, &ev.ID, &ev.Transition, &at, &severity, &summary)
+		f, err := scanFinding(rows, &ev.ID, &ev.Transition, &at, &severity, &summary, &services)
 		if err != nil {
 			return nil, err
+		}
+		if err := json.Unmarshal([]byte(services), &f.Services); err != nil {
+			return nil, fmt.Errorf("store: event %d services: %w", ev.ID, err)
 		}
 		ev.Time = time.UnixMilli(at).UTC()
 		f.Severity, f.Summary = severity, summary
@@ -195,8 +198,8 @@ func (s *SQLite) SaveFindings(ctx context.Context, c FindingChanges) error {
 	defer tx.Rollback()
 	at := c.At.UnixMilli()
 	event := func(id int64, transition string) error {
-		_, err := tx.ExecContext(ctx, `INSERT INTO finding_events (finding, transition, at, severity, summary)
-			SELECT id, ?, ?, severity, summary FROM findings WHERE id = ?`, transition, at, id)
+		_, err := tx.ExecContext(ctx, `INSERT INTO finding_events (finding, transition, at, severity, summary, services)
+			SELECT id, ?, ?, severity, summary, services FROM findings WHERE id = ?`, transition, at, id)
 		return err
 	}
 	for _, sv := range c.Save {

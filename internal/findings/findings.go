@@ -101,7 +101,7 @@ func (e *Evaluator) Evaluate(ctx context.Context) error {
 	// Restart counts live only in memory: for one stuckAfter after start, an
 	// instance that stopped restarting cannot be told from one not yet seen to.
 	warming := now.Sub(e.started) < e.cfg.StuckAfter
-	c := reconcile(active, detect(input{targets: judged, stops: stops, rising: e.restarts, now: now, cfg: e.cfg}), policy{
+	c := reconcile(active, detect(input{targets: judged, stops: stops, rising: e.restarts, off: off, now: now, cfg: e.cfg}), policy{
 		// A target no longer configured will never answer again, so its findings resolve.
 		judged:  func(t string) bool { return ok[t] || !known[t] },
 		hold:    func(f model.Finding) bool { return warming && f.Kind == model.FindingStuck && f.Rule == ruleRestarting },
@@ -132,6 +132,9 @@ func (e *Evaluator) logTransitions(active []model.Finding, c store.FindingChange
 	}
 	for _, id := range c.Resolve {
 		e.log.Info("finding resolved", "finding", keys[id])
+	}
+	for _, id := range c.Retire {
+		e.log.Info("finding retired, its kind is switched off", "finding", keys[id])
 	}
 }
 

@@ -1,18 +1,19 @@
-import { Link, useSearchParams } from "react-router";
+import { Link } from "react-router";
+import { FilterSelect } from "@/components/FilterSelect";
 import { errorMessage } from "@/components/QueryState";
 import { Ago } from "@/components/status";
 import { Badge, type Tone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { NativeSelect } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { Schemas } from "@/lib/api";
+import { useFilterParams } from "@/lib/params";
 import { useAudit, useTargets } from "@/lib/queries";
-import { serviceHref } from "@/pages/links";
+import { serviceHref, serviceLabel } from "@/pages/links";
 
 const tones: Record<Schemas["AuditEntry"]["result"], Tone> = { ok: "good", pending: "neutral", denied: "warn", error: "bad" };
 
 export function Audit() {
-  const [params, setParams] = useSearchParams();
+  const [params, set] = useFilterParams();
   const target = params.get("target") || undefined;
   const targets = useTargets();
   const audit = useAudit(target);
@@ -22,18 +23,13 @@ export function Audit() {
     <div className="flex flex-col gap-4">
       <h1 className="text-xl font-semibold">Audit log</h1>
       <div className="flex gap-2">
-        <NativeSelect
-          aria-label="Target"
-          value={target ?? ""}
-          onChange={(e) => setParams(e.target.value ? { target: e.target.value } : {}, { replace: true })}
-        >
-          <option value="">All targets</option>
-          {(targets.data ?? []).map((t) => (
-            <option key={t.name} value={t.name}>
-              {t.name}
-            </option>
-          ))}
-        </NativeSelect>
+        <FilterSelect
+          label="Target"
+          all="All targets"
+          value={target}
+          values={(targets.data ?? []).map((t) => t.name)}
+          onChange={(v) => set("target", v)}
+        />
       </div>
       {audit.isPending && <p className="text-sm text-muted-foreground">Loading…</p>}
       {audit.isError && (
@@ -63,7 +59,7 @@ export function Audit() {
                 <TableCell title={e.subject}>{e.user}</TableCell>
                 <TableCell>
                   <Link to={serviceHref(e.service)} className="hover:underline">
-                    {e.service.target}/{e.service.scope}/{e.service.name}
+                    {serviceLabel(e.service)}
                   </Link>
                 </TableCell>
                 <TableCell>

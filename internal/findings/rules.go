@@ -34,27 +34,24 @@ type input struct {
 	targets []inventory.TargetState
 	stops   []model.StopRecord
 	rising  map[model.InstanceRef]restartMemo
+	off     map[string]bool // kinds switched off
 	now     time.Time
 	cfg     config.Findings
 }
 
 func detect(in input) []observation {
-	off := map[string]bool{}
-	for _, k := range in.cfg.Disabled {
-		off[k] = true
-	}
 	running := instancesBy(in.targets, true)
 	var out []observation
-	if !off[model.FindingDrift] {
+	if !in.off[model.FindingDrift] {
 		out = append(out, drift(in, running)...)
 	}
-	if !off[model.FindingStuck] {
+	if !in.off[model.FindingStuck] {
 		out = append(out, stuck(in, running, instancesBy(in.targets, false))...)
 	}
-	if !off[model.FindingWhy] {
+	if !in.off[model.FindingWhy] {
 		out = append(out, why(in)...)
 	}
-	if !off[model.FindingHygiene] {
+	if !in.off[model.FindingHygiene] {
 		out = append(out, hygiene(in, running)...)
 	}
 	return out
@@ -248,7 +245,7 @@ func trackRestarts(prev map[model.InstanceRef]restartMemo, targets []inventory.T
 }
 
 func failed(r model.StopRecord) bool {
-	if strings.Contains(r.Reason, "OOMKilled") || strings.Contains(r.Reason, "OutOfMemory") {
+	if strings.Contains(r.Reason, model.ReasonOOMKilled) || strings.Contains(r.Reason, "OutOfMemory") { // the latter is ECS's text
 		return true
 	}
 	return r.ExitCode != nil && *r.ExitCode != 0 && !model.SignalExit(*r.ExitCode)
@@ -324,30 +321,25 @@ func hygiene(in input, running map[model.ServiceRef][]model.Instance) []observat
 				}
 			}
 		}
-		add := func(rule, summary string, values []string) {
+		add := func(rule, summary, label string, values []string) {
 			o := observation{key: "hygiene/" + rule + "/" + s.Ref.String(), kind: model.FindingHygiene, rule: rule,
 				severity: model.SeverityInfo, services: []model.ServiceRef{s.Ref}, summary: summary}
 			for _, v := range values {
-				o.evidence = append(o.evidence, model.Evidence{Label: "image", Value: v})
+				o.evidence = append(o.evidence, model.Evidence{Label: label, Value: v})
 			}
 			out = append(out, o)
 		}
 		if len(latest) > 0 {
-			add("latest-tag", "runs images tagged latest", latest)
+			add("latest-tag", "runs images tagged latest", "image", latest)
 		}
 		if len(untagged) > 0 {
-			add("untagged", "runs images with neither tag nor digest", untagged)
+			add("untagged", "runs images with neither tag nor digest", "image", untagged)
 		}
 		if len(old) > 0 {
-			add("old-image", "runs images built more than "+span(in.cfg.ImageMaxAge)+" ago", old)
+			add("old-image", "runs images built more than "+span(in.cfg.ImageMaxAge)+" ago", "image", old)
 		}
 		if known && !checked && len(names) > 0 {
-			o := observation{key: "hygiene/no-healthcheck/" + s.Ref.String(), kind: model.FindingHygiene, rule: "no-healthcheck",
-				severity: model.SeverityInfo, services: []model.ServiceRef{s.Ref}, summary: "no container has a health check"}
-			for _, n := range names {
-				o.evidence = append(o.evidence, model.Evidence{Label: "container", Value: n})
-			}
-			out = append(out, o)
+			add("no-healthcheck", "no container has a health check", "container", names)
 		}
 	}
 	return out

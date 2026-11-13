@@ -1,22 +1,20 @@
 import { Link } from "react-router";
+import { FilterSelect } from "@/components/FilterSelect";
 import { QueryState } from "@/components/QueryState";
 import { ServiceStatusBadge } from "@/components/status";
 import { Badge } from "@/components/ui/badge";
-import { Input, NativeSelect } from "@/components/ui/input";
+import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import type { Schemas } from "@/lib/api";
 import { oneOf, useFilterParams } from "@/lib/params";
-import { useServices, useTargets, type ServiceFilter } from "@/lib/queries";
+import { serviceStatuses, useServices, useTargets, type ServiceFilter } from "@/lib/queries";
 import { serviceHref } from "@/pages/links";
-
-const statuses: Schemas["ServiceStatus"][] = ["healthy", "degraded", "down", "idle"];
 
 export function Services() {
   const [params, set] = useFilterParams();
   const filter: ServiceFilter = {
     target: params.get("target") || undefined,
     provider: params.get("provider") || undefined,
-    status: oneOf(statuses, params.get("status")),
+    status: oneOf(serviceStatuses, params.get("status")),
     q: params.get("q") || undefined,
   };
   const targets = useTargets();
@@ -34,30 +32,15 @@ export function Services() {
           onChange={(e) => set("q", e.target.value)}
           className="w-64"
         />
-        <NativeSelect aria-label="Target" value={filter.target ?? ""} onChange={(e) => set("target", e.target.value)}>
-          <option value="">All targets</option>
-          {(targets.data ?? []).map((t) => (
-            <option key={t.name} value={t.name}>
-              {t.name}
-            </option>
-          ))}
-        </NativeSelect>
-        <NativeSelect aria-label="Provider" value={filter.provider ?? ""} onChange={(e) => set("provider", e.target.value)}>
-          <option value="">All providers</option>
-          {providers.map((p) => (
-            <option key={p} value={p}>
-              {p}
-            </option>
-          ))}
-        </NativeSelect>
-        <NativeSelect aria-label="Status" value={filter.status ?? ""} onChange={(e) => set("status", e.target.value)}>
-          <option value="">Any status</option>
-          {statuses.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </NativeSelect>
+        <FilterSelect
+          label="Target"
+          all="All targets"
+          value={filter.target}
+          values={(targets.data ?? []).map((t) => t.name)}
+          onChange={(v) => set("target", v)}
+        />
+        <FilterSelect label="Provider" all="All providers" value={filter.provider} values={providers} onChange={(v) => set("provider", v)} />
+        <FilterSelect label="Status" all="Any status" value={filter.status} values={serviceStatuses} onChange={(v) => set("status", v)} />
       </div>
       <QueryState query={services}>
         {(list) =>

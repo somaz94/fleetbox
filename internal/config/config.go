@@ -308,11 +308,7 @@ func (c *Config) Validate() error {
 		if len(r.Targets) == 0 {
 			errs = append(errs, fmt.Errorf("%s: targets is required", where))
 		}
-		for _, g := range r.Targets {
-			if _, err := path.Match(g, ""); err != nil {
-				errs = append(errs, fmt.Errorf("%s: bad target pattern %q", where, g))
-			}
-		}
+		errs = append(errs, checkGlobs(where, r.Targets)...)
 	}
 	if o := c.Auth.OIDC; o != nil {
 		if o.Issuer == "" || o.ClientID == "" {
@@ -363,12 +359,7 @@ func (f Findings) validate() []error {
 			errs = append(errs, fmt.Errorf("findings.%s must not be negative", d.name))
 		}
 	}
-	for _, k := range f.Disabled {
-		if !slices.Contains(model.FindingKinds, k) {
-			errs = append(errs, fmt.Errorf("findings.disabled: unknown kind %q, want one of %s", k, strings.Join(model.FindingKinds, ", ")))
-		}
-	}
-	return errs
+	return append(errs, checkKinds("findings.disabled", f.Disabled)...)
 }
 
 func (n Notify) validate() []error {
@@ -392,15 +383,38 @@ func (n Notify) validate() []error {
 		if len(r.Targets) == 0 {
 			errs = append(errs, fmt.Errorf("%s: targets is required", where))
 		}
-		for _, g := range r.Targets {
-			if _, err := path.Match(g, ""); err != nil {
-				errs = append(errs, fmt.Errorf("%s: bad target pattern %q", where, g))
-			}
+		errs = append(errs, checkGlobs(where, r.Targets)...)
+		errs = append(errs, checkKinds(where+".kinds", r.Kinds)...)
+	}
+	return errs
+}
+
+// MatchTarget reports whether target matches any of the globs, as roles and
+// notification routes both read them.
+func MatchTarget(globs []string, target string) bool {
+	for _, g := range globs {
+		if ok, _ := path.Match(g, target); ok {
+			return true
 		}
-		for _, k := range r.Kinds {
-			if !slices.Contains(model.FindingKinds, k) {
-				errs = append(errs, fmt.Errorf("%s.kinds: unknown kind %q", where, k))
-			}
+	}
+	return false
+}
+
+func checkGlobs(where string, globs []string) []error {
+	var errs []error
+	for _, g := range globs {
+		if _, err := path.Match(g, ""); err != nil {
+			errs = append(errs, fmt.Errorf("%s: bad target pattern %q", where, g))
+		}
+	}
+	return errs
+}
+
+func checkKinds(where string, kinds []string) []error {
+	var errs []error
+	for _, k := range kinds {
+		if !slices.Contains(model.FindingKinds, k) {
+			errs = append(errs, fmt.Errorf("%s: unknown kind %q, want one of %s", where, k, strings.Join(model.FindingKinds, ", ")))
 		}
 	}
 	return errs

@@ -285,3 +285,31 @@ func TestNotifyCursors(t *testing.T) {
 		t.Fatal("NotifyCursor on a closed store")
 	}
 }
+
+// An event keeps the services the finding had at its transition.
+func TestFindingEventServicesSnapshot(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	f := finding("drift", model.Ptr(t0))
+	dev := model.ServiceRef{Target: "dev", Scope: "web", Name: "api"}
+	f.Services = []model.ServiceRef{ref, dev}
+	if err := s.SaveFindings(ctx, FindingChanges{At: t0, Save: []FindingSave{{Finding: f, Opened: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	active, _ := s.ActiveFindings(ctx)
+	shrunk := active[0]
+	shrunk.Services = []model.ServiceRef{ref}
+	if err := s.SaveFindings(ctx, FindingChanges{At: t0, Save: []FindingSave{{Finding: shrunk}}}); err != nil {
+		t.Fatal(err)
+	}
+	events, err := s.FindingEvents(ctx, 0, 1)
+	if err != nil || len(events) != 1 || len(events[0].Finding.Services) != 2 || events[0].Finding.Services[1] != dev {
+		t.Fatalf("event = %+v, %v", events, err)
+	}
+	if _, err := s.db.Exec(`UPDATE finding_events SET services = '{'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.FindingEvents(ctx, 0, 1); err == nil {
+		t.Fatal("a corrupt event was read")
+	}
+}

@@ -17,7 +17,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path"
 	"strings"
 	"time"
 
@@ -179,20 +178,11 @@ func (r *route) wants(f model.Finding) bool {
 	}
 	targets := f.Targets()
 	for _, t := range targets {
-		if !r.matches(t) {
+		if !config.MatchTarget(r.targets, t) {
 			return false
 		}
 	}
 	return len(targets) > 0
-}
-
-func (r *route) matches(target string) bool {
-	for _, g := range r.targets {
-		if ok, _ := path.Match(g, target); ok {
-			return true
-		}
-	}
-	return false
 }
 
 func (n *Notifier) send(ctx context.Context, r *route, text string) error {

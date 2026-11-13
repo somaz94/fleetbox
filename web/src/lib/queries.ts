@@ -29,7 +29,9 @@ export function useServices(filter: ServiceFilter = {}) {
   });
 }
 
+export const serviceStatuses: Schemas["ServiceStatus"][] = ["healthy", "degraded", "down", "idle"];
 export const findingKinds: Schemas["FindingKind"][] = ["drift", "stuck", "why", "hygiene"];
+export const severities: Schemas["Severity"][] = ["warning", "info"];
 
 export type FindingFilter = {
   kind?: Schemas["FindingKind"];

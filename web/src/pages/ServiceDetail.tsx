@@ -415,7 +415,7 @@ function Events({ serviceKey }: { serviceKey: ServiceKey }) {
                       <span className="w-28 shrink-0 text-muted-foreground">
                         <Ago at={e.time} />
                       </span>
-                      {e.severity === "warning" && <Badge tone="warn">warning</Badge>}
+                      {e.severity === "warning" && <SeverityBadge severity={e.severity} />}
                       <span className="break-words">{e.message}</span>
                     </li>
                   ))}

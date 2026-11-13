@@ -5,10 +5,8 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { Schemas } from "@/lib/api";
-import { findingKinds, useFindings, useServices, useTargets } from "@/lib/queries";
-import { serviceHref } from "@/pages/links";
-
-const statuses: Schemas["ServiceStatus"][] = ["healthy", "degraded", "down", "idle"];
+import { findingKinds, serviceStatuses, useFindings, useServices, useTargets } from "@/lib/queries";
+import { serviceHref, serviceLabel } from "@/pages/links";
 
 export function Dashboard() {
   const targets = useTargets();
@@ -55,7 +53,7 @@ function Summary({ targets, services }: { targets: Schemas["Target"][]; services
         <CardContent>
           <p className="text-2xl font-semibold">{services.length}</p>
           <div className="mt-1 flex flex-wrap gap-2">
-            {statuses.map((s) => {
+            {serviceStatuses.map((s) => {
               const n = services.filter((v) => v.status === s).length;
               return n > 0 ? (
                 <Link key={s} to={`/services?status=${s}`} aria-label={`${n} ${s}`}>
@@ -139,7 +137,7 @@ function Attention({ targets, services }: { targets: Schemas["Target"][]; servic
             <li key={serviceHref(s.ref)} className="flex items-center gap-2">
               <ServiceStatusBadge status={s.status} />
               <Link className="font-medium hover:underline" to={serviceHref(s.ref)}>
-                {s.ref.target}/{s.ref.scope}/{s.ref.name}
+                {serviceLabel(s.ref)}
               </Link>
               {s.desired !== undefined && (
                 <span className="text-muted-foreground">

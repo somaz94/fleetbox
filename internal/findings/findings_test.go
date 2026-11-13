@@ -248,9 +248,11 @@ func TestDetectHonoursDisabled(t *testing.T) {
 	if len(all) != 3 {
 		t.Fatalf("all = %v", keys(all))
 	}
-	off := cfg
-	off.Disabled = model.FindingKinds
-	if got := detect(input{targets: targets, stops: stops, now: t0, cfg: off}); len(got) != 0 {
+	off := map[string]bool{}
+	for _, k := range model.FindingKinds {
+		off[k] = true
+	}
+	if got := detect(input{targets: targets, stops: stops, now: t0, cfg: cfg, off: off}); len(got) != 0 {
 		t.Fatalf("disabled kinds still found %v", keys(got))
 	}
 }

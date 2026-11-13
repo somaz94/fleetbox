@@ -151,6 +151,10 @@ type StopRecord struct {
 	Digest    string      `json:"digest,omitempty"`
 }
 
+// ReasonOOMKilled marks a stop reason as a kernel out-of-memory kill; the why
+// rule looks for it anywhere in the reason.
+const ReasonOOMKilled = "OOMKilled"
+
 // SignalExit reports whether a container ended because it was stopped on
 // purpose (SIGINT, SIGKILL after the grace period, SIGTERM) rather than failing.
 func SignalExit(code int) bool { return code == 130 || code == 137 || code == 143 }
