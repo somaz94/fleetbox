@@ -158,11 +158,7 @@ var proxyAuth = config.Auth{
 
 func newHarnessWith(t *testing.T, a config.Auth) *harness {
 	t.Helper()
-	authn, err := auth.New(&config.Config{Auth: a}, nil, discard)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return newHarnessAuth(t, authn)
+	return newTargetHarness(t, a, target{readonly: true})
 }
 
 func newHarnessAuth(t *testing.T, authn *auth.Service) *harness {
@@ -173,11 +169,16 @@ func newHarnessAuth(t *testing.T, authn *auth.Service) *harness {
 // newOpsHarness serves a target that can be operated.
 func newOpsHarness(t *testing.T, a config.Auth) *harness {
 	t.Helper()
+	return newTargetHarness(t, a, target{ops: true})
+}
+
+func newTargetHarness(t *testing.T, a config.Auth, tg target) *harness {
+	t.Helper()
 	authn, err := auth.New(&config.Config{Auth: a}, nil, discard)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newHarnessTarget(t, authn, target{ops: true})
+	return newHarnessTarget(t, authn, tg)
 }
 
 func newHarnessTarget(t *testing.T, authn *auth.Service, tg target) *harness {

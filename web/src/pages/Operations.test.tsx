@@ -1,17 +1,17 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { detail, operable, viewer } from "@/test/fixtures";
+import { detail, me, operable, viewer } from "@/test/fixtures";
 import { renderAt } from "@/test/render";
 import { http, server } from "@/test/server";
 
 const apiPath = "/services/prod-aws/web/api";
 
-function useOperableTargets() {
+function serveOperableTargets() {
   server.use(http.get("/targets", ({ response }) => response(200).json(operable)));
 }
 
 test("restart runs only once the service name is typed", async () => {
-  useOperableTargets();
+  serveOperableTargets();
   const calls: string[] = [];
   server.use(
     http.post("/services/{target}/{scope}/{service}/restart", ({ params, response }) => {
@@ -35,7 +35,7 @@ test("restart runs only once the service name is typed", async () => {
 });
 
 test("scale sends the desired count and keeps the dialog open on failure", async () => {
-  useOperableTargets();
+  serveOperableTargets();
   const bodies: unknown[] = [];
   server.use(
     http.post("/services/{target}/{scope}/{service}/scale", async ({ request, response }) => {
@@ -51,6 +51,7 @@ test("scale sends the desired count and keeps the dialog open on failure", async
   const dialog = screen.getByRole("dialog", { name: "Scale prod-aws/web/api" });
   const count = within(dialog).getByRole("spinbutton", { name: "Desired instances" });
   expect(count).toHaveValue(2);
+  expect(count).toHaveAccessibleDescription("A whole number from 0 to 1000.");
   const confirm = within(dialog).getByRole("button", { name: "Scale service" });
   await user.type(within(dialog).getByRole("textbox"), "api");
   for (const bad of ["-1", "1001", "1.5"]) {
@@ -68,15 +69,34 @@ test("scale sends the desired count and keeps the dialog open on failure", async
 });
 
 test("cancel closes the dialog without a request", async () => {
-  useOperableTargets();
+  serveOperableTargets();
   renderAt(apiPath);
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "Restart" }));
   await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Restart" })).toHaveFocus();
 });
 
-test("operations are hidden on a read-only target, from a viewer and where the provider lacks them", async () => {
+test("operations wait for the service to load", async () => {
+  serveOperableTargets();
+  let release = () => {};
+  const loaded = new Promise<void>((resolve) => (release = resolve));
+  server.use(
+    http.get("/services/{target}/{scope}/{service}", async ({ response }) => {
+      await loaded;
+      return response(200).json(detail);
+    }),
+  );
+  const { queryClient } = renderAt(apiPath);
+  await waitFor(() => expect(queryClient.getQueryState(["targets"])?.status).toBe("success"));
+  await screen.findByText(me.user);
+  expect(screen.queryByRole("button", { name: "Scale" })).not.toBeInTheDocument();
+  release();
+  expect(await screen.findByRole("button", { name: "Scale" })).toBeInTheDocument();
+});
+
+test("operations are hidden on a read-only target", async () => {
   renderAt(apiPath);
   expect(await screen.findByRole("button", { name: "Refresh" })).toBeInTheDocument();
   await screen.findByText("1 of 2");
@@ -85,7 +105,7 @@ test("operations are hidden on a read-only target, from a viewer and where the p
 });
 
 test("a viewer is offered no operations", async () => {
-  useOperableTargets();
+  serveOperableTargets();
   server.use(http.get("/me", ({ response }) => response(200).json(viewer)));
   renderAt(apiPath);
   await screen.findByText("1 of 2");

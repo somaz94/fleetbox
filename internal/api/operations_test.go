@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -68,6 +69,8 @@ func TestOperations(t *testing.T) {
 
 	h.fp.opErr = provider.ErrUnreachable
 	wantError(t, h.doWith(t, "POST", restartPath, operator), http.StatusBadGateway, ErrorErrorCodeUnreachable)
+	h.fp.opErr = fmt.Errorf("service prod/web/api: %w", provider.ErrNotFound)
+	wantError(t, h.doWith(t, "POST", restartPath, operator), http.StatusNotFound, ErrorErrorCodeNotFound)
 	h.fp.opErr = errors.New("dial 192.0.2.1: secret detail")
 	e := wantError(t, h.send(t, "POST", scalePath, operator, `{"desired":0}`), http.StatusInternalServerError, ErrorErrorCodeInternal)
 	if strings.Contains(e.Error.Message, "secret") {
@@ -83,6 +86,7 @@ func TestOperations(t *testing.T) {
 	want := []string{
 		"olga restart ok",
 		"olga scale error internal: internal error",
+		"olga restart error not_found: service prod/web/api: not found",
 		"olga restart error unreachable: target unreachable",
 		"mallory restart denied not_found: target \"prod\": not found",
 		"vic restart denied forbidden: restart needs the operator role on target \"prod\"",
@@ -96,14 +100,14 @@ func TestOperations(t *testing.T) {
 	if len(page.Entries) != 2 || page.Next == nil {
 		t.Fatalf("page = %+v", page)
 	}
-	next := decode[AuditPage](t, h.doWith(t, "GET", "/api/v1/audit?limit=5&before="+itoa(*page.Next), operator))
-	if len(next.Entries) != 5 || next.Next == nil || next.Entries[0].Id >= *page.Next {
+	next := decode[AuditPage](t, h.doWith(t, "GET", "/api/v1/audit?limit=6&before="+itoa(*page.Next), operator))
+	if len(next.Entries) != 6 || next.Next == nil || next.Entries[0].Id >= *page.Next {
 		t.Fatalf("next page = %+v", next)
 	}
-	if last := decode[AuditPage](t, h.doWith(t, "GET", "/api/v1/audit?before="+itoa(next.Entries[4].Id), operator)); len(last.Entries) != 0 || last.Next != nil {
+	if last := decode[AuditPage](t, h.doWith(t, "GET", "/api/v1/audit?before="+itoa(next.Entries[5].Id), operator)); len(last.Entries) != 0 || last.Next != nil {
 		t.Fatalf("last page = %+v", last)
 	}
-	scaled := decode[AuditPage](t, h.doWith(t, "GET", "/api/v1/audit?target=prod&limit=6", operator)).Entries[5]
+	scaled := decode[AuditPage](t, h.doWith(t, "GET", "/api/v1/audit?target=prod&limit=7", operator)).Entries[6]
 	if scaled.Params == nil || *scaled.Params != `{"desired":3}` || scaled.Subject != nil || scaled.Service.Target != "prod" {
 		t.Fatalf("scale entry = %+v", scaled)
 	}
@@ -125,11 +129,7 @@ func TestOperationRefusals(t *testing.T) {
 	wantError(t, readonly.doWith(t, "POST", restartPath, viewer), http.StatusForbidden, ErrorErrorCodeForbidden)
 	wantError(t, readonly.doWith(t, "POST", restartPath, operator), http.StatusForbidden, ErrorErrorCodeForbidden)
 
-	authn, err := auth.New(&config.Config{Auth: proxyAuth}, nil, discard)
-	if err != nil {
-		t.Fatal(err)
-	}
-	incapable := newHarnessTarget(t, authn, target{})
+	incapable := newTargetHarness(t, proxyAuth, target{})
 	wantError(t, incapable.send(t, "POST", scalePath, operator, `{"desired":2}`), http.StatusNotImplemented, ErrorErrorCodeUnsupported)
 
 	for _, h := range []*harness{readonly, incapable} {
@@ -177,12 +177,8 @@ func TestAuditFailClosed(t *testing.T) {
 
 // Both operations answer every documented status the same way.
 func TestOperationStatuses(t *testing.T) {
-	authn, err := auth.New(&config.Config{Auth: proxyAuth}, nil, discard)
-	if err != nil {
-		t.Fatal(err)
-	}
 	ops := newOpsHarness(t, proxyAuth)
-	incapable := newHarnessTarget(t, authn, target{})
+	incapable := newTargetHarness(t, proxyAuth, target{})
 	for _, path := range []string{restartPath, scalePath} {
 		send := func(h *harness, hdr http.Header) *httptest.ResponseRecorder {
 			return h.send(t, "POST", path, hdr, `{"desired":1}`)
@@ -195,6 +191,7 @@ func TestOperationStatuses(t *testing.T) {
 			code   ErrorErrorCode
 		}{
 			provider.ErrUnreachable:  {http.StatusBadGateway, ErrorErrorCodeUnreachable},
+			provider.ErrNotFound:     {http.StatusNotFound, ErrorErrorCodeNotFound},
 			context.DeadlineExceeded: {http.StatusGatewayTimeout, ErrorErrorCodeTimeout},
 			errors.New("boom"):       {http.StatusInternalServerError, ErrorErrorCodeInternal},
 		} {

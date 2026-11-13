@@ -43,12 +43,12 @@ Two ideas are borrowed deliberately: Komodo's outbound agent (a host connects to
             ┌──────────────────────── fleetbox (one Go binary, one image) ────────────────────────┐
  Browser ──▶│ HTTP server                                                                         │
  (React)    │  ├─ /auth/*        OIDC login, session cookie (BFF)                                 │
-            │  ├─ /api/v1/*      JSON, generated from api/openapi.yaml                            │
+            │  ├─ /api/v1/*      JSON, generated from api/openapi.yaml; authorisation, audit      │
             │  ├─ /api/v1/*/logs SSE                                                              │
             │  └─ /*             embedded React build                                             │
             │        │                                                                            │
             │        ▼                                                                            │
-            │  core (service layer) ── authz ── audit                                             │
+            │  core (service layer)                                                               │
             │   ├─ cache ◀── poller / event watchers                                              │
             │   ├─ analyze (drift, stuck, why)                                                    │
             │   ├─ store (SQLite: audit log, snapshots, stop history)                             │
@@ -147,7 +147,7 @@ A target covers every cluster in its region unless `clusters` names a subset. Ea
 | Digest | image inspect `RepoDigests` |
 | Events | the `events` stream, which also keeps the cache current without polling |
 | Logs | container logs stream, demultiplexed |
-| Restart | container restart for each container of the service in turn, stopping at the first failure; one-off containers from `docker compose run` are left alone, as `docker compose restart` does |
+| Restart | container restart for each container of the service in turn, stopping at the first failure; a container removed since the listing is skipped, and a service with none left is not found; one-off containers from `docker compose run` are left alone, as `docker compose restart` does |
 | Scale | not supported: the compose file lives on the host |
 
 - The client is a minimal Engine API client covering only the calls above, not the Docker SDK, which would pull a large dependency tree for six requests. Paths are unversioned so each daemon answers in its own current API version; daemons have raised their minimum supported version before.

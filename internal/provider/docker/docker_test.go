@@ -630,6 +630,10 @@ func TestRestart(t *testing.T) {
 	if err := p.Restart(ctx, webRef); err != nil || len(d.posts) != 2 {
 		t.Fatalf("vanished container: %v, posts %v", err, d.posts)
 	}
+	d.fail = map[string]int{"/containers/aaaaaaaaaa01ffff/restart": http.StatusNotFound, "/containers/aaaaaaaaaa02ffff/restart": http.StatusNotFound}
+	if err := p.Restart(ctx, webRef); !errors.Is(err, provider.ErrNotFound) {
+		t.Fatalf("every container vanished: %v", err)
+	}
 	d.posts = nil
 	d.fail = map[string]int{"/containers/aaaaaaaaaa01ffff/restart": http.StatusInternalServerError}
 	err := p.Restart(ctx, webRef)

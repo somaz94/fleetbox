@@ -256,18 +256,7 @@ func (s *Server) operate(ctx context.Context, ref model.ServiceRef, op operation
 	}
 	p, _ := auth.FromContext(ctx)
 	entry := store.AuditEntry{Time: time.Now(), User: p.User, Subject: p.Subject, Service: ref, Action: op.action, Params: op.params}
-	var refusal error
-	switch role := s.auth.Role(p, ref.Target); {
-	case role == "":
-		refusal = fmt.Errorf("target %q: %w", ref.Target, provider.ErrNotFound)
-	case role != config.RoleOperator:
-		refusal = forbidden(fmt.Sprintf("%s needs the operator role on target %q", op.action, ref.Target))
-	case t.Readonly:
-		refusal = forbidden(fmt.Sprintf("target %q is read-only", ref.Target))
-	case !op.allowed(t.Capabilities):
-		refusal = fmt.Errorf("the %s provider cannot %s: %w", t.Provider, op.action, provider.ErrUnsupported)
-	}
-	if refusal != nil {
+	if refusal := s.refusal(p, t, op); refusal != nil {
 		entry.Result, entry.Error = store.ResultDenied, auditText(refusal)
 		if _, err := s.audit.AppendAudit(ctx, entry); err != nil {
 			s.log.Error("audit a refused operation", "service", ref.String(), "action", op.action, "err", err)
@@ -296,8 +285,29 @@ func (s *Server) operate(ctx context.Context, ref model.ServiceRef, op operation
 	if runErr != nil {
 		return core.DetailView{}, runErr
 	}
-	// The operation went through, so it never answers as a failure: a failed
-	// read falls back to the cache, then to the service as it was before.
+	return s.settled(ctx, ref, prior, priorErr)
+}
+
+// refusal returns why the caller may not run op on t, checked in the order
+// hidden, role, read-only, capability.
+func (s *Server) refusal(p auth.Principal, t inventory.TargetState, op operation) error {
+	switch role := s.auth.Role(p, t.Name); {
+	case role == "":
+		return fmt.Errorf("target %q: %w", t.Name, provider.ErrNotFound)
+	case role != config.RoleOperator:
+		return forbidden(fmt.Sprintf("%s needs the operator role on target %q", op.action, t.Name))
+	case t.Readonly:
+		return forbidden(fmt.Sprintf("target %q is read-only", t.Name))
+	case !op.allowed(t.Capabilities):
+		return fmt.Errorf("the %s provider cannot %s: %w", t.Provider, op.action, provider.ErrUnsupported)
+	}
+	return nil
+}
+
+// settled answers for an operation that went through, so it never answers as
+// a failure: a failed read falls back to the cache, then to the service as it
+// was before.
+func (s *Server) settled(ctx context.Context, ref model.ServiceRef, prior core.DetailView, priorErr error) (core.DetailView, error) {
 	d, err := s.core.Refresh(ctx, ref)
 	if err == nil {
 		return d, nil
@@ -402,16 +412,20 @@ func (s *Server) ListAudit(ctx context.Context, req ListAuditRequestObject) (Lis
 	}
 	out := ListAudit200JSONResponse{Entries: []AuditEntry{}}
 	for _, e := range entries {
-		out.Entries = append(out.Entries, AuditEntry{
-			Id: e.ID, Time: e.Time, User: e.User, Subject: ptr(e.Subject),
-			Service: ServiceRef{Target: e.Service.Target, Scope: e.Service.Scope, Name: e.Service.Name},
-			Action:  AuditEntryAction(e.Action), Params: ptr(e.Params), Result: AuditEntryResult(e.Result), Error: ptr(e.Error),
-		})
+		out.Entries = append(out.Entries, toAuditEntry(e))
 	}
 	if len(entries) == q.Limit {
 		out.Next = &entries[len(entries)-1].ID
 	}
 	return out, nil
+}
+
+func toAuditEntry(e store.AuditEntry) AuditEntry {
+	return AuditEntry{
+		Id: e.ID, Time: e.Time, User: e.User, Subject: ptr(e.Subject),
+		Service: ServiceRef{Target: e.Service.Target, Scope: e.Service.Scope, Name: e.Service.Name},
+		Action:  AuditEntryAction(e.Action), Params: ptr(e.Params), Result: AuditEntryResult(e.Result), Error: ptr(e.Error),
+	}
 }
 
 // classify maps an error to its wire code and status. Internal errors are

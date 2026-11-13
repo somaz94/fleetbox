@@ -29,15 +29,15 @@ const (
 
 // AuditEntry records one attempted operation, allowed or not.
 type AuditEntry struct {
-	ID      int64            `json:"id"`
-	Time    time.Time        `json:"time"`
-	User    string           `json:"user"`
-	Subject string           `json:"subject,omitempty"`
-	Service model.ServiceRef `json:"service"`
-	Action  string           `json:"action"`
-	Params  string           `json:"params,omitempty"`
-	Result  string           `json:"result"`
-	Error   string           `json:"error,omitempty"`
+	ID      int64
+	Time    time.Time
+	User    string
+	Subject string
+	Service model.ServiceRef
+	Action  string
+	Params  string
+	Result  string
+	Error   string
 }
 
 // AuditQuery selects a page of the audit log. Only entries on Targets are
@@ -122,6 +122,8 @@ var migrations = []string{
 type SQLite struct {
 	db *sql.DB
 }
+
+var _ Store = (*SQLite)(nil)
 
 // Open opens (creating if needed) the database at path and migrates it.
 func Open(ctx context.Context, path string) (*SQLite, error) {

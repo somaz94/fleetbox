@@ -87,6 +87,8 @@ func (p *Provider) Capabilities() provider.Capabilities {
 
 // Restart restarts the service's containers one after another, so a service
 // with several replicas keeps some of them up, and stops at the first failure.
+// A container removed since the listing is skipped; with none left the service
+// is not found.
 // Like `docker compose restart` it skips one-off containers from
 // `docker compose run`: starting an exited one would run its command again.
 func (p *Provider) Restart(ctx context.Context, ref model.ServiceRef) error {
@@ -103,6 +105,7 @@ func (p *Provider) Restart(ctx context.Context, ref model.ServiceRef) error {
 	if len(ids) == 0 {
 		return fmt.Errorf("service %s: %w", ref, provider.ErrNotFound)
 	}
+	restarted := 0
 	for i, id := range ids {
 		err := p.engine.restartContainer(ctx, id)
 		if errors.Is(err, provider.ErrNotFound) {
@@ -111,6 +114,10 @@ func (p *Provider) Restart(ctx context.Context, ref model.ServiceRef) error {
 		if err != nil {
 			return fmt.Errorf("restart container %s (%d of %d): %w", shortID(id), i+1, len(ids), err)
 		}
+		restarted++
+	}
+	if restarted == 0 {
+		return fmt.Errorf("service %s: %w", ref, provider.ErrNotFound)
 	}
 	return nil
 }

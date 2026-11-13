@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useId, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router";
 import { errorMessage, QueryState } from "@/components/QueryState";
 import { Ago, InstanceStatusBadge, ServiceStatusBadge } from "@/components/status";
@@ -39,7 +39,7 @@ export function ServiceDetail() {
           <Button variant="outline" size="sm" disabled={refresh.isPending} onClick={() => refresh.mutate()}>
             {refresh.isPending ? "Refreshing…" : "Refresh"}
           </Button>
-          <Operations serviceKey={key} desired={detail.data?.service.desired} onDone={setDone} />
+          {detail.data && <Operations serviceKey={key} desired={detail.data.service.desired} onDone={setDone} />}
         </div>
       </div>
       {done && (
@@ -101,6 +101,19 @@ function Operations({ serviceKey, desired, onDone }: { serviceKey: ServiceKey; d
 
 const MAX_DESIRED = 1000;
 
+const copy = {
+  restart: {
+    verb: "Restart",
+    submit: "Restart service",
+    help: "Every instance of the service is replaced. The request is recorded in the audit log.",
+  },
+  scale: {
+    verb: "Scale",
+    submit: "Scale service",
+    help: "Sets how many instances the service runs. The request is recorded in the audit log.",
+  },
+} as const;
+
 // OperationDialog runs an operation only once the service name is typed, so a
 // stray click cannot restart or scale the wrong service.
 function OperationDialog({
@@ -125,6 +138,7 @@ function OperationDialog({
   const countValid = count.trim() !== "" && Number.isInteger(n) && n >= 0 && n <= MAX_DESIRED;
   const ready = typed === serviceKey.service && (action === "restart" || countValid) && !mutation.isPending;
   const name = `${serviceKey.target}/${serviceKey.scope}/${serviceKey.service}`;
+  const hintId = useId();
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -137,18 +151,27 @@ function OperationDialog({
   };
 
   return (
-    <Dialog title={action === "restart" ? `Restart ${name}` : `Scale ${name}`} onClose={onClose}>
+    <Dialog title={`${copy[action].verb} ${name}`} onClose={onClose}>
       <form onSubmit={submit} className="flex flex-col gap-4 text-sm">
-        <p className="text-muted-foreground">
-          {action === "restart"
-            ? "Every instance of the service is replaced. The request is recorded in the audit log."
-            : "Sets how many instances the service runs. The request is recorded in the audit log."}
-        </p>
+        <p className="text-muted-foreground">{copy[action].help}</p>
         {action === "scale" && (
-          <label className="flex flex-col gap-1">
-            Desired instances
-            <Input type="number" min={0} max={MAX_DESIRED} value={count} onChange={(e) => setCount(e.target.value)} />
-          </label>
+          <div className="flex flex-col gap-1">
+            <label className="flex flex-col gap-1">
+              Desired instances
+              <Input
+                type="number"
+                min={0}
+                max={MAX_DESIRED}
+                value={count}
+                aria-invalid={!countValid}
+                aria-describedby={hintId}
+                onChange={(e) => setCount(e.target.value)}
+              />
+            </label>
+            <span id={hintId} className="text-xs text-muted-foreground">
+              A whole number from 0 to {MAX_DESIRED}.
+            </span>
+          </div>
         )}
         <label className="flex flex-col gap-1">
           <span>
@@ -158,7 +181,7 @@ function OperationDialog({
         </label>
         {mutation.isError && (
           <p role="alert" className="text-destructive">
-            {action === "restart" ? "Restart" : "Scale"} failed: {errorMessage(mutation.error)}
+            {copy[action].verb} failed: {errorMessage(mutation.error)}
           </p>
         )}
         <div className="flex justify-end gap-2">
@@ -166,7 +189,7 @@ function OperationDialog({
             Cancel
           </Button>
           <Button type="submit" variant="destructive" disabled={!ready}>
-            {mutation.isPending ? "Working…" : action === "restart" ? "Restart service" : "Scale service"}
+            {mutation.isPending ? "Working…" : copy[action].submit}
           </Button>
         </div>
       </form>
