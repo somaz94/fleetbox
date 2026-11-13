@@ -286,8 +286,8 @@ targets:
     readonly: false
     ecs:
       region: ap-northeast-2
-      readRoleArn: arn:aws:iam::210987654321:role/fleetbox-read
-      operateRoleArn: arn:aws:iam::210987654321:role/fleetbox-operate
+      readRoleArn: arn:aws:iam::123456789012:role/fleetbox-read
+      operateRoleArn: arn:aws:iam::123456789012:role/fleetbox-operate
   - name: build-host-1
     provider: docker
     docker:

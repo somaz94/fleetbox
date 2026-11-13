@@ -43,10 +43,19 @@ config:
   #   - name: prod-aws
   #     provider: ecs
   #     env: prod
-  #     readonly: true
+  #     # Targets are read-only unless they say `readonly: false`.
   #     ecs:
   #       region: ap-northeast-2
   #       readRoleArn: arn:aws:iam::123456789012:role/fleetbox-read
+  #   - name: dev-aws
+  #     provider: ecs
+  #     env: dev
+  #     readonly: false
+  #     ecs:
+  #       region: ap-northeast-2
+  #       readRoleArn: arn:aws:iam::123456789012:role/fleetbox-read
+  #       # Assumed only for restart and scale (needs ecs:UpdateService).
+  #       operateRoleArn: arn:aws:iam::123456789012:role/fleetbox-operate
   #   - name: build-host-1
   #     provider: docker
   #     docker:
@@ -65,8 +74,8 @@ oidc:
 ssh:
   existingSecret: ""
 
-# AWS credentials for ECS targets. Each target assumes its own role on top of
-# whichever base identity is configured here.
+# AWS credentials for ECS targets. Each target's readRoleArn, and its
+# operateRoleArn if set, is assumed directly from the base identity here.
 aws:
   # Self-hosted IRSA: the cluster's service-account issuer is registered as an
   # IAM OIDC provider and this role trusts the fleetbox ServiceAccount.
@@ -104,6 +113,8 @@ ingress:
   #         pathType: Prefix
   tls: []
 
+# A release may migrate the store; back up the volume before upgrading if you
+# may need to roll back to an older chart.
 persistence:
   enabled: true
   existingClaim: ""

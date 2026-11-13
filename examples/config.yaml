@@ -36,9 +36,9 @@ targets:
     readonly: false
     ecs:
       region: ap-northeast-2
-      readRoleArn: arn:aws:iam::210987654321:role/fleetbox-read
+      readRoleArn: arn:aws:iam::123456789012:role/fleetbox-read
       # Assumed only for restart and scale; without it the target cannot be operated.
-      operateRoleArn: arn:aws:iam::210987654321:role/fleetbox-operate
+      operateRoleArn: arn:aws:iam::123456789012:role/fleetbox-operate
       clusters: [web, batch]
   - name: build-host-1
     provider: docker

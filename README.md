@@ -2,7 +2,7 @@
 
 A web console for containers that run outside Kubernetes: Amazon ECS services and plain Docker hosts in one view, with what runs, which image digest, whether it is healthy and why it last stopped. It runs as one service in a Kubernetes cluster and is the only component holding the cloud and host credentials.
 
-> **Status**: early, read-only releases. The provider layer (ECS, Docker over SSH), the read API, OIDC sign-in with group-to-target roles and the console are released; operations (restart, scale) are not yet. Releases are listed on the [releases page](https://github.com/somaz94/fleetbox/releases), and the roadmap is in [docs/DESIGN.md](docs/DESIGN.md#roadmap).
+> **Status**: early releases. The provider layer (ECS, Docker over SSH), the read API, OIDC sign-in with group-to-target roles, the console, and restart and scale for operators with an audit log are released; findings are next. Releases are listed on the [releases page](https://github.com/somaz94/fleetbox/releases), and the roadmap is in [docs/DESIGN.md](docs/DESIGN.md#roadmap).
 
 <br/>
 
@@ -42,6 +42,17 @@ Portainer and its peers manage Docker hosts but not ECS; e1s and the AWS console
 ## Configuration
 
 [examples/config.yaml](examples/config.yaml) shows every target type. Unknown keys are rejected, and `fleetbox check --config <file>` validates a file and builds every provider without contacting any target.
+
+A target is read-only unless its configuration says `readonly: false`. An ECS target also needs `operateRoleArn`, a role allowed `ecs:UpdateService` that trusts the server's base identity rather than the read role, before it can be restarted or scaled; Docker targets can be restarted but not scaled. Only users holding the `operator` role on a target see its operations, and every request is recorded in the audit log.
+
+<br/>
+
+## Upgrading
+
+### From v0.2
+
+- Targets now default to read-only. A v0.2 configuration keeps working but allows no operations until a target says `readonly: false`.
+- The store gains a schema migration on first start. A v0.2 binary refuses to open the migrated database, so back up the volume before upgrading if you may need to roll back.
 
 <br/>
 

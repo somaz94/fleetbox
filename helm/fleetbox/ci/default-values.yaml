@@ -15,12 +15,14 @@ config:
     - name: prod-aws
       provider: ecs
       env: prod
-      readonly: true
+      readonly: false
       ecs:
         region: ap-northeast-2
         readRoleArn: arn:aws:iam::123456789012:role/fleetbox-read
+        operateRoleArn: arn:aws:iam::123456789012:role/fleetbox-operate
     - name: build-host-1
       provider: docker
+      readonly: false
       docker:
         host: 192.0.2.10
         user: fleetbox
