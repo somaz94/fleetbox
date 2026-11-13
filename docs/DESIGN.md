@@ -50,8 +50,8 @@ Two ideas are borrowed deliberately: Komodo's outbound agent (a host connects to
             │        ▼                                                                            │
             │  core (service layer)                                                               │
             │   ├─ cache ◀── poller / event watchers                                              │
-            │   ├─ analyze (drift, stuck, why)                                                    │
-            │   ├─ store (SQLite: audit log, snapshots, stop history)                             │
+            │   ├─ findings (drift, stuck, why, hygiene) ── notify ──────────────────▶ Slack      │
+            │   ├─ store (SQLite: audit log, stop history, findings, sessions)                    │
             │   └─ provider registry                                                              │
             │        ├─ ecs     ──────────────────────────────────────────────▶ AWS APIs          │
             │        └─ docker ── transport ── ssh   ─────────────────────────▶ dockerd           │
@@ -167,7 +167,7 @@ Access to the Docker API is root on that host, which is why targets default to r
 
 - **Poller**: one loop per target, interval configurable per target, each refresh bounded by that interval. ECS targets poll; Docker targets also subscribe to events, refreshing once per burst of changes, and the interval remains as a safety net.
 - **Cache**: an in-memory snapshot per target, replaced atomically. A target whose last refresh failed keeps its previous snapshot, marked stale with the error and the time of the last success.
-- **Store** (SQLite through `modernc.org/sqlite`, no cgo): audit log, stopped-instance history, and periodic snapshots of service revisions for drift history. Behind a `Store` interface.
+- **Store** (SQLite through `modernc.org/sqlite`, no cgo): audit log, stopped-instance history, login sessions, and findings with their open and resolve transitions. Behind a `Store` interface.
 - **Partial failure**: one unreachable target never fails a list. It appears as a stale or errored target and every other target still renders.
 
 <br/>
@@ -190,7 +190,7 @@ Access to the Docker API is root on that host, which is why targets default to r
 | `GET /api/v1/me` | user, groups, effective role per target | v0.2 |
 | `POST …/restart`, `POST …/scale` | operations, audited | v0.3 |
 | `GET /api/v1/audit` | audit log | v0.3 |
-| `GET /api/v1/findings` | drift, stuck, stop-reason and hygiene findings | v0.4 |
+| `GET /api/v1/findings` | open or resolved findings the caller may see; `kind`, `target`, `severity`, `state` | v0.4 |
 
 - A service's status is derived in core, the same for every transport: `idle` when nothing is desired, `down` when nothing runs, `degraded` when fewer run than desired or a running instance is unhealthy, otherwise `healthy`. A provider without a desired count (Docker) is judged on its instances alone.
 - Every error, including an unknown route or a malformed parameter, answers with the `Error` schema and a code (`bad_request`, `unauthorized`, `forbidden`, `not_found`, `unsupported`, `unreachable`, `timeout`, `internal`). An internal error's text is logged, not returned.
@@ -241,7 +241,7 @@ The server uses each SDK's default credential chain, so the method is a deployme
 
 From that base identity each target assumes its read role, and its operate role only for an operation.
 
-Docker SSH keys and `known_hosts` are mounted from a Secret. Credentials are never logged, never returned by the API and never written to the store.
+Docker SSH keys and `known_hosts`, and Slack webhook URLs, are mounted from Secrets. Credentials are never logged, never returned by the API and never written to the store.
 
 <br/>
 
@@ -296,6 +296,19 @@ targets:
       user: fleetbox
       keyFile: /etc/fleetbox/ssh/id_ed25519
       knownHostsFile: /etc/fleetbox/ssh/known_hosts
+findings:                     # every key optional; these are the defaults
+  interval: 1m
+  driftAfter: 1h
+  stuckAfter: 15m
+  failedStopWindow: 24h
+  imageMaxAge: 2160h
+  disabled: []                # kinds to switch off, e.g. [hygiene]
+notify:
+  slack:
+    - name: platform          # unique; keys the route's delivery cursor
+      webhookURLFile: /etc/fleetbox/slack/platform
+      targets: ["*"]
+      kinds: [drift, stuck, why]   # omit for every kind
 ```
 
 A target is read-only unless it says `readonly: false`, so operating is an opt-in per target. Unknown keys are an error, not a warning: a misspelled `readonly` must not silently change what a target allows.
@@ -306,14 +319,31 @@ A target is read-only unless it says `readonly: false`, so operating is an opt-i
 
 ## Findings
 
-| Finding | Rule |
-|---|---|
-| **drift** | Services that are the same app (same name, or the same `fleetbox.io/app` tag or label) in targets of different `env` within one provider, running different digests. Matching never crosses providers |
-| **stuck** | ECS: a rollout `IN_PROGRESS`, or running below desired, for longer than a threshold. Docker: restart count rising, or unhealthy, for longer than a threshold |
-| **why** | Last stop reasons per service from the store: ECS `stoppedReason` and container exit codes, Docker exit code, `OOMKilled` and the last health-check output |
-| **hygiene** | `:latest` or untagged images, images older than a threshold, services with no health check |
+A finding is a condition fleetbox noticed and keeps track of. An evaluator in `internal/findings` runs on its own interval over the cache and the store's stop history; it never calls a provider.
 
-Thresholds are configuration, and each finding carries the evidence it was raised on.
+| Finding | Rule | Raised after |
+|---|---|---|
+| **drift** | Services that are the same app (the `fleetbox.io/app` tag or label, otherwise the same service name) in targets of different `env` within one provider, running different image digests. Matching never crosses providers, and a target without `env` takes no part | `driftAfter` |
+| **stuck** | ECS: a rollout `IN_PROGRESS` since it started, or fewer running than desired. Docker: a restart count that keeps rising. Any provider: a running instance that is unhealthy | `stuckAfter` |
+| **why** | A stop within `failedStopWindow` that exited non-zero or was killed for memory, read from the store, so it outlives ECS's own short memory of stopped tasks | at once |
+| **hygiene** | A running image tagged `latest`, or with neither tag nor digest; a Docker image older than `imageMaxAge`; a service none of whose containers has a health check | at once |
+
+- Each finding has a kind, a rule within it, a severity (`warning`, or `info` for hygiene), a summary and the evidence it was raised on: the digests per environment, how long a rollout has run, the failed stops with their exit codes, the image.
+- A condition first seen is pending; once it has lasted its rule's delay it opens, and when it is gone it resolves. One that comes back later opens as a new finding. Only open and resolved findings are shown or notified, so a passing condition never surfaces.
+- Findings and every open and resolve transition are kept in the store, so a restart neither forgets how long a condition has lasted nor repeats a notification. Resolved findings are kept as long as stop history.
+- A target whose last refresh failed is not judged: a finding involving it stays as it was until the target answers again, so an unreachable host does not resolve and reopen everything on it.
+- A field a provider cannot supply decides nothing. An ECS image's age would need the registry, so the image-age rule skips ECS; a container whose health check is unknown is not reported as lacking one.
+- A finding is shown to a caller only if they hold a role on every target it involves, so drift between production and development does not reveal production digests to someone who sees development only.
+- Thresholds are configuration.
+
+<br/>
+
+## Notifications
+
+- Slack incoming webhooks, configured as routes. Each route names the targets (globs) and kinds it wants and the file holding its webhook URL. A finding goes to a route when every target it involves matches.
+- A message is sent when a finding opens and when it resolves, and for nothing else. Operations are recorded in the audit log, not announced.
+- Delivery reads the store's transitions in order, and each route keeps its own cursor there, moved only after Slack accepts the message. A failed delivery is retried with backoff and never holds up the evaluator; a restart resumes where delivery stopped. A new route starts at the latest transition, so enabling one does not replay history.
+- A webhook URL is a credential: it is read from a file and never logged, returned by the API or written to the store, error messages included.
 
 <br/>
 
@@ -344,7 +374,7 @@ Thresholds are configuration, and each finding carries the evidence it was raise
 | v0.2 | Read-only console, OIDC login with role mapping on reads, Helm chart, image |
 | v0.3 | Restart and scale for operators, audit log |
 | v0.4 | Findings (drift, stuck, why, hygiene), Slack notifier |
-| Later | Docker agent transport, CLI as an API client, a third provider, interactive shell |
+| Later | Docker agent transport, CLI as an API client, a third provider, interactive shell, revision history for drift, ECS image age |
 
 <br/>
 
