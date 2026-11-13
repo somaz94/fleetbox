@@ -165,6 +165,27 @@ func TestRegistrationBeforeFirstRefresh(t *testing.T) {
 	if _, ok := cache.Target("nope"); ok {
 		t.Fatal("unknown target found")
 	}
+	if s.Endpoint != nil {
+		t.Fatalf("a provider without Describer has endpoint %+v", s.Endpoint)
+	}
+}
+
+type describedProvider struct{ fakeProvider }
+
+func (*describedProvider) Endpoint() []model.Attribute {
+	return []model.Attribute{{Name: "host", Value: "192.0.2.10:22"}}
+}
+
+// The endpoint is read once at registration and survives every refresh.
+func TestEndpointKeptAcrossRefreshes(t *testing.T) {
+	pl, cache := newPoller(&describedProvider{fakeProvider{inv: inventoryWith(apiRef)}}, &fakeStops{}, time.Minute)
+	if err := pl.Refresh(context.Background(), "prod"); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := cache.Target("prod")
+	if len(s.Endpoint) != 1 || s.Endpoint[0].Value != "192.0.2.10:22" || s.RefreshedAt == nil {
+		t.Fatalf("state = %+v", s)
+	}
 }
 
 func TestRefresh(t *testing.T) {

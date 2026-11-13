@@ -54,10 +54,14 @@ func NewPoller(targets []Target, cache *Cache, stops StopRecorder, log *slog.Log
 	}
 	for _, t := range targets {
 		p.targets[t.Config.Name] = t
-		cache.add(TargetState{
+		st := TargetState{
 			Name: t.Config.Name, Provider: t.Provider.Kind(), Env: t.Config.Env,
 			Readonly: t.Config.Readonly, Capabilities: t.Provider.Capabilities(),
-		})
+		}
+		if d, ok := t.Provider.(provider.Describer); ok {
+			st.Endpoint = d.Endpoint()
+		}
+		cache.add(st)
 	}
 	return p
 }

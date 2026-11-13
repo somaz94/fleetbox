@@ -78,6 +78,12 @@ type Watcher interface {
 	Watch(ctx context.Context) (<-chan struct{}, error)
 }
 
+// Describer is optional: what the target points at, for the console. It must
+// never include a credential or the path to one.
+type Describer interface {
+	Endpoint() []model.Attribute
+}
+
 // Factory builds an adapter for one target.
 type Factory func(t config.Target) (Provider, error)
 

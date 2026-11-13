@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -255,14 +256,21 @@ func task(cluster, id, group, desired, last string) types.Task {
 		TaskDefinitionArn: aws.String(acct + ":task-definition/api:7"),
 		HealthStatus:      types.HealthStatusHealthy,
 		StartedAt:         aws.Time(t0),
+		CreatedAt:         aws.Time(t0.Add(-time.Minute)),
+		LaunchType:        types.LaunchTypeFargate,
+		AvailabilityZone:  aws.String("ap-northeast-2a"),
+		Cpu:               aws.String("256"),
+		Memory:            aws.String("512"),
 		Containers: []types.Container{
 			{Name: aws.String("app"), Image: aws.String("example/api:1.0"), ImageDigest: aws.String("sha256:aaa"), LastStatus: aws.String(last),
-				HealthStatus: types.HealthStatusUnknown,
+				HealthStatus:      types.HealthStatusUnknown,
+				NetworkInterfaces: []types.NetworkInterface{{PrivateIpv4Address: aws.String("192.0.2.20")}},
 				NetworkBindings: []types.NetworkBinding{
 					{ContainerPort: aws.Int32(8080), HostPort: aws.Int32(32768), Protocol: types.TransportProtocolTcp},
 					{ContainerPort: aws.Int32(9090)},
 				}},
-			{Name: aws.String("envoy"), Image: aws.String("envoy:1"), LastStatus: aws.String(last), HealthStatus: types.HealthStatusUnhealthy},
+			{Name: aws.String("envoy"), Image: aws.String("envoy:1"), LastStatus: aws.String(last), HealthStatus: types.HealthStatusUnhealthy,
+				NetworkInterfaces: []types.NetworkInterface{{PrivateIpv4Address: aws.String("192.0.2.20")}, {}}},
 		},
 	}
 }
@@ -374,6 +382,10 @@ func TestInventory(t *testing.T) {
 	run := byID["t-2"]
 	if run.Status != model.StatusRunning || run.Health != model.HealthHealthy || run.Revision != "api:7" {
 		t.Fatalf("t-2 = %+v", run)
+	}
+	if !run.CreatedAt.Equal(t0.Add(-time.Minute)) || run.LaunchType != "FARGATE" || run.Zone != "ap-northeast-2a" ||
+		*run.CPU != 0.25 || *run.MemoryMiB != 512 || !slices.Equal(run.Addresses, []model.Address{{IP: "192.0.2.20"}}) {
+		t.Fatalf("t-2 detail = %+v", run)
 	}
 	app, envoy := run.Containers[0], run.Containers[1]
 	if app.Name != "app" || app.Digest != "sha256:aaa" || app.Health != "" || app.Status != "running" {
@@ -781,6 +793,25 @@ func TestNew(t *testing.T) {
 	}
 	if _, err := provider.New(target("region: ap-northeast-2")); err != nil {
 		t.Fatalf("registry: %v", err)
+	}
+	if got := ep.Endpoint(); !slices.Equal(got, []model.Attribute{{Name: "region", Value: "ap-northeast-2"}, {Name: "clusters", Value: "all"}}) {
+		t.Fatalf("endpoint = %+v", got)
+	}
+	p, _ = New(target("region: ap-northeast-2\nclusters: [web, batch]"))
+	if got := p.(provider.Describer).Endpoint(); got[1].Value != "web, batch" {
+		t.Fatalf("endpoint with clusters = %+v", got)
+	}
+}
+
+// A capacity provider stands in for the launch type, and sizes ECS does not
+// report stay absent.
+func TestTaskWithoutSizes(t *testing.T) {
+	tk := task("web", "t-9", "service:api", "RUNNING", "RUNNING")
+	tk.LaunchType, tk.CapacityProviderName = "", aws.String("FARGATE_SPOT")
+	tk.Cpu, tk.Memory, tk.CreatedAt = nil, aws.String("lots"), nil
+	in := (&Provider{target: "prod"}).mapTask("web", "api", tk)
+	if in.LaunchType != "FARGATE_SPOT" || in.CPU != nil || in.MemoryMiB != nil || in.CreatedAt != nil {
+		t.Fatalf("instance = %+v", in)
 	}
 }
 

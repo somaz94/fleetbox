@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -166,7 +167,7 @@ func newDaemon() *fakeDaemon {
 		PrivatePort int    `json:"PrivatePort"`
 		PublicPort  int    `json:"PublicPort"`
 		Type        string `json:"Type"`
-	}{{PrivatePort: 8080, PublicPort: 80, Type: "tcp"}, {PrivatePort: 9090, Type: "tcp"}}
+	}{{PrivatePort: 8080, PublicPort: 80, Type: "tcp"}, {PrivatePort: 8080, PublicPort: 80, Type: "tcp"}, {PrivatePort: 9090, Type: "tcp"}}
 	web1.inspect.State.Health = &struct {
 		Status string `json:"Status"`
 		Log    []struct {
@@ -596,6 +597,74 @@ closed:
 	d.fail = map[string]int{"/events": http.StatusInternalServerError}
 	if _, err := serve(t, d).Watch(context.Background()); err == nil {
 		t.Fatal("watch failure not returned")
+	}
+}
+
+func TestInstanceDetail(t *testing.T) {
+	tests := []struct {
+		name, inspect string
+		check         func(t *testing.T, in model.Instance)
+	}{
+		{name: "everything set", inspect: `{"Created": "2024-03-01T10:00:00.5Z",
+			"HostConfig": {"RestartPolicy": {"Name": "on-failure", "MaximumRetryCount": 5}, "NanoCpus": 1500000000, "Memory": 536870912},
+			"Mounts": [{"Type": "bind", "Source": "/data/repo", "Destination": "/srv", "RW": true},
+			           {"Type": "volume", "Name": "pgdata", "Source": "/var/lib/docker/volumes/pgdata/_data", "Destination": "/var/lib/postgresql", "RW": false}],
+			"NetworkSettings": {"Networks": {"lan": {"IPAddress": "192.0.2.6"}, "bridge": {"IPAddress": "172.17.0.2"}, "none": {"IPAddress": ""}}}}`,
+			check: func(t *testing.T, in model.Instance) {
+				if in.CreatedAt == nil || !in.CreatedAt.Equal(time.Date(2024, 3, 1, 10, 0, 0, 5e8, time.UTC)) {
+					t.Fatalf("created = %v", in.CreatedAt)
+				}
+				if in.RestartPolicy != "on-failure:5" || *in.CPU != 1.5 || *in.MemoryMiB != 512 {
+					t.Fatalf("policy %q cpu %v memory %v", in.RestartPolicy, *in.CPU, *in.MemoryMiB)
+				}
+				want := []model.Mount{{Type: "bind", Source: "/data/repo", Destination: "/srv"},
+					{Type: "volume", Source: "pgdata", Destination: "/var/lib/postgresql", ReadOnly: true}}
+				if !slices.Equal(in.Mounts, want) {
+					t.Fatalf("mounts = %+v", in.Mounts)
+				}
+				if !slices.Equal(in.Addresses, []model.Address{{Network: "bridge", IP: "172.17.0.2"}, {Network: "lan", IP: "192.0.2.6"}}) {
+					t.Fatalf("addresses = %+v", in.Addresses)
+				}
+			}},
+		{name: "unlimited and unnamed policy", inspect: `{"HostConfig": {"RestartPolicy": {"Name": ""}}}`,
+			check: func(t *testing.T, in model.Instance) {
+				if in.RestartPolicy != "no" || in.CPU != nil || in.MemoryMiB != nil || in.Mounts != nil || in.Addresses != nil {
+					t.Fatalf("instance = %+v", in)
+				}
+			}},
+		{name: "cpu from quota", inspect: `{"HostConfig": {"RestartPolicy": {"Name": "unless-stopped"}, "CpuQuota": 50000, "CpuPeriod": 200000, "Memory": 1024}}`,
+			check: func(t *testing.T, in model.Instance) {
+				if in.RestartPolicy != "unless-stopped" || *in.CPU != 0.25 || *in.MemoryMiB != 1 {
+					t.Fatalf("policy %q cpu %v memory %v", in.RestartPolicy, *in.CPU, *in.MemoryMiB)
+				}
+			}},
+		{name: "quota alone uses the kernel period", inspect: `{"HostConfig": {"RestartPolicy": {"Name": "on-failure"}, "CpuQuota": 50000}}`,
+			check: func(t *testing.T, in model.Instance) {
+				if in.RestartPolicy != "on-failure" || *in.CPU != 0.5 {
+					t.Fatalf("policy %q cpu %v", in.RestartPolicy, *in.CPU)
+				}
+			}},
+		{name: "secret sources hidden, unnamed volume keeps its path", inspect: `{"Mounts": [
+			{"Type": "bind", "Source": "/home/deploy/db_password.txt", "Destination": "/run/secrets/db_password"},
+			{"Type": "volume", "Source": "/var/lib/docker/volumes/x/_data", "Destination": "/cache", "RW": true}]}`,
+			check: func(t *testing.T, in model.Instance) {
+				want := []model.Mount{{Type: "bind", Destination: "/run/secrets/db_password", ReadOnly: true},
+					{Type: "volume", Source: "/var/lib/docker/volumes/x/_data", Destination: "/cache"}}
+				if !slices.Equal(in.Mounts, want) {
+					t.Fatalf("mounts = %+v", in.Mounts)
+				}
+			}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var cj containerJSON
+			if err := json.Unmarshal([]byte(tt.inspect), &cj); err != nil {
+				t.Fatal(err)
+			}
+			var in model.Instance
+			addDetail(&in, cj)
+			tt.check(t, in)
+		})
 	}
 }
 

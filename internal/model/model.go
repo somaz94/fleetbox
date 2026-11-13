@@ -110,6 +110,39 @@ type Instance struct {
 	StopReason string      `json:"stopReason,omitempty"`
 	Restarts   *int        `json:"restarts,omitempty"`
 	Containers []Container `json:"containers"`
+
+	CreatedAt *time.Time `json:"createdAt,omitempty"`
+	// CPU (vCPU) and MemoryMiB are limits; nil means unlimited or unknown.
+	CPU       *float64  `json:"cpu,omitempty"`
+	MemoryMiB *int      `json:"memoryMiB,omitempty"`
+	Addresses []Address `json:"addresses,omitempty"`
+	// Docker only.
+	RestartPolicy string  `json:"restartPolicy,omitempty"`
+	Mounts        []Mount `json:"mounts,omitempty"`
+	// ECS only.
+	LaunchType string `json:"launchType,omitempty"`
+	Zone       string `json:"zone,omitempty"`
+}
+
+// Address is an instance's IP on one network; Network is empty when the
+// provider does not name it.
+type Address struct {
+	Network string `json:"network,omitempty"`
+	IP      string `json:"ip"`
+}
+
+// Mount is a volume or host path inside an instance.
+type Mount struct {
+	Type        string `json:"type,omitempty"`
+	Source      string `json:"source,omitempty"`
+	Destination string `json:"destination"`
+	ReadOnly    bool   `json:"readOnly"`
+}
+
+// Attribute is one named value describing a target, shown as is.
+type Attribute struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 // Inventory is everything one target runs, as of one refresh.

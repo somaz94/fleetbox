@@ -8,7 +8,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,6 +36,24 @@ func Run(t *testing.T, newProvider func(t *testing.T) provider.Provider, fx Fixt
 	t.Run("kind", func(t *testing.T) {
 		if newProvider(t).Kind() == "" {
 			t.Fatal("Kind is empty")
+		}
+	})
+
+	t.Run("endpoint", func(t *testing.T) {
+		d, ok := newProvider(t).(provider.Describer)
+		if !ok {
+			t.Skip("provider does not describe its endpoint")
+		}
+		for _, a := range d.Endpoint() {
+			if a.Name == "" || a.Value == "" {
+				t.Fatalf("endpoint attribute %+v is empty", a)
+			}
+			n := strings.ToLower(a.Name)
+			for _, word := range []string{"user", "key", "known", "role", "token", "secret", "password"} {
+				if strings.Contains(n, word) {
+					t.Fatalf("endpoint attribute %q names a credential", a.Name)
+				}
+			}
 		}
 	})
 
@@ -208,6 +228,7 @@ func checkInventory(t *testing.T, fx Fixture, inv model.Inventory) {
 		default:
 			t.Fatalf("instance %v has non-normalised status %q", in.Ref, in.Status)
 		}
+		checkInstanceDetail(t, in)
 		for _, c := range in.Containers {
 			if c.ImageCreated != nil && c.ImageCreated.IsZero() {
 				t.Fatalf("instance %v container %q reports a zero image time instead of none", in.Ref, c.Name)
@@ -215,6 +236,27 @@ func checkInventory(t *testing.T, fx Fixture, inv model.Inventory) {
 		}
 	}
 	checkSortedInstances(t, inv.Instances)
+}
+
+// checkInstanceDetail holds the absent-not-zero rule for instance details.
+func checkInstanceDetail(t *testing.T, in model.Instance) {
+	t.Helper()
+	if in.CreatedAt != nil && in.CreatedAt.IsZero() {
+		t.Fatalf("instance %v reports a zero creation time instead of none", in.Ref)
+	}
+	if in.CPU != nil && *in.CPU <= 0 || in.MemoryMiB != nil && *in.MemoryMiB <= 0 {
+		t.Fatalf("instance %v reports a zero limit instead of none", in.Ref)
+	}
+	for _, a := range in.Addresses {
+		if net.ParseIP(a.IP) == nil {
+			t.Fatalf("instance %v lists address %q, which is not an IP", in.Ref, a.IP)
+		}
+	}
+	for _, m := range in.Mounts {
+		if m.Destination == "" {
+			t.Fatalf("instance %v lists a mount without a destination", in.Ref)
+		}
+	}
 }
 
 func checkSortedInstances(t *testing.T, ins []model.Instance) {

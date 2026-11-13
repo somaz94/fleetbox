@@ -58,8 +58,31 @@ type containerJSON struct {
 	ID           string `json:"Id"`
 	Name         string `json:"Name"`
 	Image        string `json:"Image"`
+	Created      string `json:"Created"`
 	RestartCount int    `json:"RestartCount"`
-	State        struct {
+	HostConfig   struct {
+		RestartPolicy struct {
+			Name              string `json:"Name"`
+			MaximumRetryCount int    `json:"MaximumRetryCount"`
+		} `json:"RestartPolicy"`
+		NanoCPUs  int64 `json:"NanoCpus"`
+		CPUQuota  int64 `json:"CpuQuota"`
+		CPUPeriod int64 `json:"CpuPeriod"`
+		Memory    int64 `json:"Memory"`
+	} `json:"HostConfig"`
+	Mounts []struct {
+		Type        string `json:"Type"`
+		Name        string `json:"Name"`
+		Source      string `json:"Source"`
+		Destination string `json:"Destination"`
+		RW          bool   `json:"RW"`
+	} `json:"Mounts"`
+	NetworkSettings struct {
+		Networks map[string]struct {
+			IPAddress string `json:"IPAddress"`
+		} `json:"Networks"`
+	} `json:"NetworkSettings"`
+	State struct {
 		Status     string `json:"Status"`
 		ExitCode   int    `json:"ExitCode"`
 		OOMKilled  bool   `json:"OOMKilled"`

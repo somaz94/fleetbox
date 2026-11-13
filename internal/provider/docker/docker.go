@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -53,6 +55,8 @@ type Provider struct {
 	engine *engine
 	now    func() time.Time
 
+	endpoint []model.Attribute
+
 	mu     sync.Mutex
 	images map[string]imageInfo // by image ID; image IDs are content addresses
 }
@@ -69,7 +73,9 @@ func New(t config.Target) (provider.Provider, error) {
 		if err != nil {
 			return nil, fmt.Errorf("docker: %w", err)
 		}
-		return NewWithDialer(t.Name, tr), nil
+		p := NewWithDialer(t.Name, tr)
+		p.endpoint = endpointOf(c, tr.addr)
+		return p, nil
 	default:
 		return nil, fmt.Errorf("docker: unknown transport %q", c.Transport)
 	}
@@ -81,6 +87,17 @@ func NewWithDialer(target string, d Dialer) *Provider {
 }
 
 func (p *Provider) Kind() string { return Kind }
+
+// Endpoint names the host, never the user or key it signs in with.
+func (p *Provider) Endpoint() []model.Attribute { return slices.Clone(p.endpoint) }
+
+func endpointOf(c Config, addr string) []model.Attribute {
+	out := []model.Attribute{{Name: "transport", Value: TransportSSH}, {Name: "host", Value: addr}}
+	if c.DockerPath != "" {
+		out = append(out, model.Attribute{Name: "dockerPath", Value: c.DockerPath})
+	}
+	return out
+}
 
 func (p *Provider) Capabilities() provider.Capabilities {
 	return provider.Capabilities{Logs: true, FollowLogs: true, Events: true, Restart: true}
@@ -280,11 +297,19 @@ func mapContainer(ref model.ServiceRef, s containerSummary, cj containerJSON, im
 		StartedAt: parseTime(cj.State.StartedAt),
 		Restarts:  model.Ptr(cj.RestartCount),
 	}
+	addDetail(&in, cj)
 	if h := cj.State.Health; h != nil {
 		in.Health = healthOf(h.Status)
 		c.Health = in.Health
 	}
+	// With IPv6 on, the daemon lists a published port once per address family.
+	seen := map[[3]any]bool{}
 	for _, pt := range s.Ports {
+		k := [3]any{pt.PrivatePort, pt.PublicPort, pt.Type}
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
 		port := model.Port{Container: pt.PrivatePort, Protocol: pt.Type}
 		if pt.PublicPort != 0 {
 			port.Host = model.Ptr(pt.PublicPort)
@@ -299,6 +324,48 @@ func mapContainer(ref model.ServiceRef, s containerSummary, cj containerJSON, im
 	}
 	in.Containers = []model.Container{c}
 	return in
+}
+
+// addDetail fills the inspect-only fields. A limit of zero means none was set.
+func addDetail(in *model.Instance, cj containerJSON) {
+	in.CreatedAt = parseTime(cj.Created)
+	hc := cj.HostConfig
+	switch rp := hc.RestartPolicy; {
+	case rp.Name == "":
+		in.RestartPolicy = "no"
+	case rp.Name == "on-failure" && rp.MaximumRetryCount > 0:
+		in.RestartPolicy = fmt.Sprintf("on-failure:%d", rp.MaximumRetryCount)
+	default:
+		in.RestartPolicy = rp.Name
+	}
+	switch {
+	case hc.NanoCPUs > 0:
+		in.CPU = model.Ptr(float64(hc.NanoCPUs) / 1e9)
+	case hc.CPUQuota > 0:
+		period := hc.CPUPeriod
+		if period <= 0 {
+			period = 100000 // the kernel's CFS period when only --cpu-quota is set
+		}
+		in.CPU = model.Ptr(float64(hc.CPUQuota) / float64(period))
+	}
+	if hc.Memory > 0 {
+		in.MemoryMiB = model.Ptr(max(1, int(hc.Memory>>20)))
+	}
+	for _, m := range cj.Mounts {
+		src := m.Source
+		switch {
+		case m.Type == "volume" && m.Name != "":
+			src = m.Name
+		case strings.HasPrefix(m.Destination, "/run/secrets/"):
+			src = "" // where a compose secret lives on the host is not shown
+		}
+		in.Mounts = append(in.Mounts, model.Mount{Type: m.Type, Source: src, Destination: m.Destination, ReadOnly: !m.RW})
+	}
+	for _, name := range slices.Sorted(maps.Keys(cj.NetworkSettings.Networks)) {
+		if ip := cj.NetworkSettings.Networks[name].IPAddress; ip != "" {
+			in.Addresses = append(in.Addresses, model.Address{Network: name, IP: ip})
+		}
+	}
 }
 
 func stopReason(cj containerJSON) string {

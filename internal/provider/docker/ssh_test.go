@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -22,6 +23,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/somaz94/fleetbox/internal/config"
+	"github.com/somaz94/fleetbox/internal/model"
 	"github.com/somaz94/fleetbox/internal/provider"
 )
 
@@ -320,6 +322,17 @@ func TestNew(t *testing.T) {
 	}
 	if _, ok := p.(provider.Watcher); !ok {
 		t.Fatal("docker provider must implement Watcher")
+	}
+	want := []model.Attribute{{Name: "transport", Value: "ssh"}, {Name: "host", Value: "127.0.0.1:" + strconv.Itoa(fx.port)}}
+	if got := p.(provider.Describer).Endpoint(); !slices.Equal(got, want) {
+		t.Fatalf("endpoint = %+v", got)
+	}
+	withPath, err := provider.New(target(ok + "\ndockerPath: /usr/local/bin/docker"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := withPath.(provider.Describer).Endpoint(); len(got) != 3 || got[2] != (model.Attribute{Name: "dockerPath", Value: "/usr/local/bin/docker"}) {
+		t.Fatalf("endpoint with dockerPath = %+v", got)
 	}
 	for doc, want := range map[string]string{
 		ok + "\ntransport: agent":  `unknown transport "agent"`,

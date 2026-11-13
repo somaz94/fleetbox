@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -520,6 +522,15 @@ func (p *Provider) mapService(cluster string, s types.Service) model.Service {
 	return ms
 }
 
+// Endpoint names the region and clusters, never the roles assumed.
+func (p *Provider) Endpoint() []model.Attribute {
+	clusters := "all"
+	if len(p.cfg.Clusters) > 0 {
+		clusters = strings.Join(p.cfg.Clusters, ", ")
+	}
+	return []model.Attribute{{Name: "region", Value: p.cfg.Region}, {Name: "clusters", Value: clusters}}
+}
+
 func (p *Provider) mapTask(cluster, service string, t types.Task) model.Instance {
 	in := model.Instance{
 		Ref:        model.InstanceRef{Service: model.ServiceRef{Target: p.target, Scope: cluster, Name: service}, ID: lastSegment(aws.ToString(t.TaskArn))},
@@ -530,6 +541,19 @@ func (p *Provider) mapTask(cluster, service string, t types.Task) model.Instance
 		StoppedAt:  t.StoppedAt,
 		StopReason: aws.ToString(t.StoppedReason),
 		Containers: make([]model.Container, 0, len(t.Containers)),
+		CreatedAt:  t.CreatedAt,
+		LaunchType: string(t.LaunchType),
+		Zone:       aws.ToString(t.AvailabilityZone),
+	}
+	if in.LaunchType == "" {
+		in.LaunchType = aws.ToString(t.CapacityProviderName)
+	}
+	// Task-level sizes are strings: CPU units (1024 per vCPU) and MiB.
+	if units, err := strconv.Atoi(aws.ToString(t.Cpu)); err == nil && units > 0 {
+		in.CPU = model.Ptr(float64(units) / 1024)
+	}
+	if mib, err := strconv.Atoi(aws.ToString(t.Memory)); err == nil && mib > 0 {
+		in.MemoryMiB = model.Ptr(mib)
 	}
 	for _, c := range t.Containers {
 		mc := model.Container{
@@ -551,6 +575,12 @@ func (p *Provider) mapTask(cluster, service string, t types.Task) model.Instance
 			mc.Ports = append(mc.Ports, port)
 		}
 		in.Containers = append(in.Containers, mc)
+		// awsvpc containers share the task's interface; list each address once.
+		for _, ni := range c.NetworkInterfaces {
+			if ip := aws.ToString(ni.PrivateIpv4Address); ip != "" && !slices.ContainsFunc(in.Addresses, func(a model.Address) bool { return a.IP == ip }) {
+				in.Addresses = append(in.Addresses, model.Address{IP: ip})
+			}
+		}
 	}
 	sort.Slice(in.Containers, func(i, j int) bool { return in.Containers[i].Name < in.Containers[j].Name })
 	return in

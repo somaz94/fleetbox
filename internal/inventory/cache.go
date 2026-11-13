@@ -21,6 +21,7 @@ type TargetState struct {
 	Env          string                `json:"env,omitempty"`
 	Readonly     bool                  `json:"readonly"`
 	Capabilities provider.Capabilities `json:"capabilities"`
+	Endpoint     []model.Attribute     `json:"endpoint,omitempty"`
 	RefreshedAt  *time.Time            `json:"refreshedAt,omitempty"`
 	AttemptedAt  *time.Time            `json:"attemptedAt,omitempty"`
 	Error        string                `json:"error,omitempty"`
