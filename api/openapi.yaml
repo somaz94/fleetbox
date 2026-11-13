@@ -495,6 +495,16 @@ components:
         error: { type: string }
         serviceCount: { type: integer }
         instanceCount: { type: integer }
+        endpoint:
+          type: array
+          description: What the target points at, such as the Docker host or the ECS region; never a credential
+          items: { $ref: "#/components/schemas/Attribute" }
+    Attribute:
+      type: object
+      required: [name, value]
+      properties:
+        name: { type: string }
+        value: { type: string }
     ServiceRef:
       type: object
       required: [target, scope, name]
@@ -540,6 +550,12 @@ components:
           type: object
           additionalProperties: { type: string }
         instances: { $ref: "#/components/schemas/InstanceCounts" }
+        stoppedSince:
+          type: string
+          format: date-time
+          description: >
+            When nothing runs or is pending, the newest stop among the stopped
+            instances the provider still lists; absent otherwise
         stale:
           type: boolean
           description: The target's last refresh failed
@@ -564,6 +580,13 @@ components:
         ports:
           type: array
           items: { $ref: "#/components/schemas/Port" }
+        imageCreated:
+          type: string
+          format: date-time
+          description: When the image was built, if the provider can tell
+        healthCheck:
+          type: boolean
+          description: Whether the container defines a health check; absent when unknown
     Health:
       type: string
       enum: [healthy, unhealthy, starting]
@@ -585,6 +608,38 @@ components:
         containers:
           type: array
           items: { $ref: "#/components/schemas/Container" }
+        createdAt: { type: string, format: date-time }
+        cpu:
+          type: number
+          format: double
+          description: CPU limit in vCPU; absent when unlimited or unknown
+        memoryMiB:
+          type: integer
+          description: Memory limit in MiB; absent when unlimited or unknown
+        addresses:
+          type: array
+          items: { $ref: "#/components/schemas/Address" }
+        restartPolicy: { type: string, description: Docker only }
+        mounts:
+          type: array
+          description: Docker only
+          items: { $ref: "#/components/schemas/Mount" }
+        launchType: { type: string, description: "ECS only: the launch type or capacity provider" }
+        zone: { type: string, description: "ECS only: the availability zone" }
+    Address:
+      type: object
+      required: [ip]
+      properties:
+        network: { type: string }
+        ip: { type: string }
+    Mount:
+      type: object
+      required: [destination, readOnly]
+      properties:
+        type: { type: string }
+        source: { type: string }
+        destination: { type: string }
+        readOnly: { type: boolean }
     StopRecord:
       type: object
       required: [instanceId, stoppedAt]

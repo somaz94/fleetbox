@@ -52,6 +52,8 @@ type ServiceView struct {
 	Status string
 	Counts Counts
 	Stale  bool
+	// StoppedSince is the newest stop while nothing runs or is pending.
+	StoppedSince *time.Time
 }
 
 // DetailView is a service with its instances and recorded stops.
@@ -100,7 +102,7 @@ func (c *Core) Services(f Filter) []ServiceView {
 		}
 		byService := groupInstances(t.Inventory.Instances)
 		for _, s := range t.Inventory.Services {
-			if q != "" && !strings.Contains(strings.ToLower(s.Ref.String()), q) {
+			if q != "" && !matches(s.Ref, q) {
 				continue
 			}
 			v := view(s, byService[s.Ref], t.Stale())
@@ -214,6 +216,7 @@ func groupInstances(ins []model.Instance) map[model.ServiceRef][]model.Instance 
 
 func view(s model.Service, ins []model.Instance, stale bool) ServiceView {
 	v := ServiceView{Service: s, Stale: stale}
+	var lastStop *time.Time
 	for _, in := range ins {
 		switch in.Status {
 		case model.StatusRunning:
@@ -225,10 +228,24 @@ func view(s model.Service, ins []model.Instance, stale bool) ServiceView {
 			v.Counts.Pending++
 		case model.StatusStopped:
 			v.Counts.Stopped++
+			if in.StoppedAt != nil && (lastStop == nil || in.StoppedAt.After(*lastStop)) {
+				lastStop = in.StoppedAt
+			}
 		}
 	}
 	v.Status = statusOf(s, v.Counts)
+	if v.Counts.Running == 0 && v.Counts.Pending == 0 && isZero(s.Running) && isZero(s.Pending) {
+		v.StoppedSince = lastStop
+	}
 	return v
+}
+
+func isZero(n *int) bool { return n == nil || *n == 0 }
+
+// matches also tries target/name, the form the console shows when a scope
+// carries no meaning (Docker's standalone containers).
+func matches(r model.ServiceRef, q string) bool {
+	return strings.Contains(strings.ToLower(r.String()), q) || strings.Contains(strings.ToLower(r.Target+"/"+r.Name), q)
 }
 
 // statusOf prefers the provider's own counts and falls back to instances for

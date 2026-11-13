@@ -165,6 +165,41 @@ func TestStatusOf(t *testing.T) {
 	}
 }
 
+func TestStoppedSince(t *testing.T) {
+	early, late := t0, t0.Add(time.Hour)
+	stopped := func(at *time.Time) model.Instance { return model.Instance{Status: model.StatusStopped, StoppedAt: at} }
+	tests := []struct {
+		name string
+		s    model.Service
+		ins  []model.Instance
+		want *time.Time
+	}{
+		{"newest stop", model.Service{}, []model.Instance{stopped(&early), stopped(&late), stopped(nil)}, &late},
+		{"something runs", model.Service{}, []model.Instance{stopped(&late), {Status: model.StatusRunning}}, nil},
+		{"something pending", model.Service{}, []model.Instance{stopped(&late), {Status: model.StatusPending}}, nil},
+		{"provider counts a running task", model.Service{Running: model.Ptr(1)}, []model.Instance{stopped(&late)}, nil},
+		{"provider counts a pending task", model.Service{Running: model.Ptr(0), Pending: model.Ptr(1)}, []model.Instance{stopped(&late)}, nil},
+		{"no stop time known", model.Service{}, []model.Instance{stopped(nil)}, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := view(tt.s, tt.ins, false).StoppedSince
+			if (got == nil) != (tt.want == nil) || got != nil && !got.Equal(*tt.want) {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMatches(t *testing.T) {
+	ref := model.ServiceRef{Target: "host-b", Scope: "_standalone", Name: "redis"}
+	for q, want := range map[string]bool{"host-b/_standalone/redis": true, "host-b/redis": true, "redis": true, "host-b/web": false} {
+		if got := matches(ref, q); got != want {
+			t.Fatalf("matches(%q) = %v", q, got)
+		}
+	}
+}
+
 func TestService(t *testing.T) {
 	c, _, _, stops := setup(t)
 	ctx := context.Background()

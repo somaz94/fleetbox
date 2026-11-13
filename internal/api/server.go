@@ -567,7 +567,20 @@ func toTarget(t inventory.TargetState) Target {
 		Capabilities: Capabilities{Logs: c.Logs, FollowLogs: c.FollowLogs, Events: c.Events, Restart: c.Restart, Scale: c.Scale},
 		RefreshedAt:  t.RefreshedAt, AttemptedAt: t.AttemptedAt, Stale: t.Stale(), Error: ptr(t.Error),
 		ServiceCount: len(t.Inventory.Services), InstanceCount: len(t.Inventory.Instances),
+		Endpoint: listOf(t.Endpoint, func(a model.Attribute) Attribute { return Attribute{Name: a.Name, Value: a.Value} }),
 	}
+}
+
+// listOf maps a slice, leaving an empty one absent rather than [].
+func listOf[T, U any](in []T, f func(T) U) *[]U {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]U, 0, len(in))
+	for _, v := range in {
+		out = append(out, f(v))
+	}
+	return &out
 }
 
 func toService(v core.ServiceView) Service {
@@ -575,7 +588,8 @@ func toService(v core.ServiceView) Service {
 		Ref:      toServiceRef(v.Ref),
 		Provider: v.Provider, Status: ServiceStatus(v.Status), Stale: v.Stale,
 		Desired: v.Desired, Running: v.Running, Pending: v.Pending, Revision: ptr(v.Revision),
-		Instances: InstanceCounts{Running: v.Counts.Running, Pending: v.Counts.Pending, Stopped: v.Counts.Stopped, Unhealthy: v.Counts.Unhealthy},
+		Instances:    InstanceCounts{Running: v.Counts.Running, Pending: v.Counts.Pending, Stopped: v.Counts.Stopped, Unhealthy: v.Counts.Unhealthy},
+		StoppedSince: v.StoppedSince,
 	}
 	if v.Rollout != nil {
 		s.Rollout = &Rollout{State: v.Rollout.State, StartedAt: v.Rollout.StartedAt}
@@ -604,17 +618,18 @@ func toInstance(in model.Instance) Instance {
 		Id: in.Ref.ID, Status: InstanceStatus(in.Status), Health: health(in.Health), Revision: ptr(in.Revision),
 		StartedAt: in.StartedAt, StoppedAt: in.StoppedAt, StopReason: ptr(in.StopReason), Restarts: in.Restarts,
 		Containers: []Container{},
+		CreatedAt:  in.CreatedAt, Cpu: in.CPU, MemoryMiB: in.MemoryMiB,
+		RestartPolicy: ptr(in.RestartPolicy), LaunchType: ptr(in.LaunchType), Zone: ptr(in.Zone),
+		Addresses: listOf(in.Addresses, func(a model.Address) Address { return Address{Network: ptr(a.Network), Ip: a.IP} }),
+		Mounts: listOf(in.Mounts, func(m model.Mount) Mount {
+			return Mount{Type: ptr(m.Type), Source: ptr(m.Source), Destination: m.Destination, ReadOnly: m.ReadOnly}
+		}),
 	}
 	for _, c := range in.Containers {
 		mc := Container{Name: c.Name, Image: ptr(c.Image), Digest: ptr(c.Digest), Status: ptr(c.Status),
-			Health: health(c.Health), ExitCode: c.ExitCode, Reason: ptr(c.Reason)}
-		if len(c.Ports) > 0 {
-			ports := make([]Port, 0, len(c.Ports))
-			for _, p := range c.Ports {
-				ports = append(ports, Port{Container: p.Container, Host: p.Host, Protocol: ptr(p.Protocol)})
-			}
-			mc.Ports = &ports
-		}
+			Health: health(c.Health), ExitCode: c.ExitCode, Reason: ptr(c.Reason),
+			ImageCreated: c.ImageCreated, HealthCheck: c.HealthCheck,
+			Ports: listOf(c.Ports, func(p model.Port) Port { return Port{Container: p.Container, Host: p.Host, Protocol: ptr(p.Protocol)} })}
 		out.Containers = append(out.Containers, mc)
 	}
 	return out

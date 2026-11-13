@@ -375,6 +375,12 @@ export interface components {
             error?: string;
             serviceCount: number;
             instanceCount: number;
+            /** @description What the target points at, such as the Docker host or the ECS region; never a credential */
+            endpoint?: components["schemas"]["Attribute"][];
+        };
+        Attribute: {
+            name: string;
+            value: string;
         };
         ServiceRef: {
             target: string;
@@ -410,6 +416,11 @@ export interface components {
                 [key: string]: string;
             };
             instances: components["schemas"]["InstanceCounts"];
+            /**
+             * Format: date-time
+             * @description When nothing runs or is pending, the newest stop among the stopped instances the provider still lists; absent otherwise
+             */
+            stoppedSince?: string;
             /** @description The target's last refresh failed */
             stale: boolean;
         };
@@ -427,6 +438,13 @@ export interface components {
             exitCode?: number;
             reason?: string;
             ports?: components["schemas"]["Port"][];
+            /**
+             * Format: date-time
+             * @description When the image was built, if the provider can tell
+             */
+            imageCreated?: string;
+            /** @description Whether the container defines a health check; absent when unknown */
+            healthCheck?: boolean;
         };
         /** @enum {string} */
         Health: "healthy" | "unhealthy" | "starting";
@@ -444,6 +462,34 @@ export interface components {
             stopReason?: string;
             restarts?: number;
             containers: components["schemas"]["Container"][];
+            /** Format: date-time */
+            createdAt?: string;
+            /**
+             * Format: double
+             * @description CPU limit in vCPU; absent when unlimited or unknown
+             */
+            cpu?: number;
+            /** @description Memory limit in MiB; absent when unlimited or unknown */
+            memoryMiB?: number;
+            addresses?: components["schemas"]["Address"][];
+            /** @description Docker only */
+            restartPolicy?: string;
+            /** @description Docker only */
+            mounts?: components["schemas"]["Mount"][];
+            /** @description ECS only: the launch type or capacity provider */
+            launchType?: string;
+            /** @description ECS only: the availability zone */
+            zone?: string;
+        };
+        Address: {
+            network?: string;
+            ip: string;
+        };
+        Mount: {
+            type?: string;
+            source?: string;
+            destination: string;
+            readOnly: boolean;
         };
         StopRecord: {
             instanceId: string;

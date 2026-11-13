@@ -119,11 +119,19 @@ func fixture() model.Inventory {
 		Instances: []model.Instance{{
 			Ref: model.InstanceRef{Service: apiRef, ID: "t1"}, Status: model.StatusRunning, Health: model.HealthHealthy,
 			Revision: "api:7", StartedAt: &started, Restarts: model.Ptr(0),
+			CreatedAt: &started, CPU: model.Ptr(0.25), MemoryMiB: model.Ptr(512), LaunchType: "FARGATE", Zone: "ap-northeast-2a",
+			Addresses: []model.Address{{IP: "192.0.2.20"}},
+			Mounts:    []model.Mount{{Type: "bind", Source: "/srv/data", Destination: "/data", ReadOnly: true}},
 			Containers: []model.Container{{Name: "app", Image: "example/api:1", Digest: "sha256:a", Status: "running",
-				Health: model.HealthHealthy, ExitCode: model.Ptr(0),
+				Health: model.HealthHealthy, ExitCode: model.Ptr(0), ImageCreated: &started, HealthCheck: model.Ptr(true),
 				Ports: []model.Port{{Container: 8080, Host: model.Ptr(80), Protocol: "tcp"}, {Container: 9090}}}},
 		}},
 	}
+}
+
+// Endpoint makes the fake a Describer, as both real providers are.
+func (f *fakeProvider) Endpoint() []model.Attribute {
+	return []model.Attribute{{Name: "region", Value: "ap-northeast-2"}}
 }
 
 type harness struct {
@@ -302,6 +310,9 @@ func TestInfoAndTargets(t *testing.T) {
 	if tg.Name != "prod" || !tg.Readonly || *tg.Env != "prod" || tg.ServiceCount != 1 || tg.InstanceCount != 1 || tg.Stale || tg.Error != nil || !tg.Capabilities.FollowLogs {
 		t.Fatalf("target = %+v", tg)
 	}
+	if tg.Endpoint == nil || (*tg.Endpoint)[0] != (Attribute{Name: "region", Value: "ap-northeast-2"}) {
+		t.Fatalf("endpoint = %+v", tg.Endpoint)
+	}
 }
 
 func TestListServices(t *testing.T) {
@@ -336,6 +347,15 @@ func TestGetService(t *testing.T) {
 	if in.Id != "t1" || *in.Health != HealthHealthy || in.StoppedAt != nil || *c.Digest != "sha256:a" || *c.ExitCode != 0 ||
 		len(*c.Ports) != 2 || *(*c.Ports)[0].Host != 80 || (*c.Ports)[1].Host != nil || (*c.Ports)[1].Protocol != nil {
 		t.Fatalf("instance = %+v", in)
+	}
+	if !in.CreatedAt.Equal(t0) || *in.Cpu != 0.25 || *in.MemoryMiB != 512 || *in.LaunchType != "FARGATE" || *in.Zone != "ap-northeast-2a" ||
+		in.RestartPolicy != nil || (*in.Addresses)[0].Ip != "192.0.2.20" || (*in.Addresses)[0].Network != nil ||
+		*(*in.Mounts)[0].Type != "bind" || *(*in.Mounts)[0].Source != "/srv/data" || (*in.Mounts)[0].Destination != "/data" || !(*in.Mounts)[0].ReadOnly ||
+		!c.ImageCreated.Equal(t0) || !*c.HealthCheck {
+		t.Fatalf("instance detail = %+v", in)
+	}
+	if d.Service.StoppedSince != nil {
+		t.Fatalf("a running service has stoppedSince %v", d.Service.StoppedSince)
 	}
 	// Absent fields stay absent on the wire rather than appearing as zero values.
 	raw := decode[struct {
