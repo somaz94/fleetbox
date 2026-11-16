@@ -287,14 +287,12 @@ func (s *logStream) fill() error {
 	if hdr[0] == 2 {
 		stream = "stderr"
 	}
-	payload := make([]byte, binary.BigEndian.Uint32(hdr[4:]))
-	if _, err := io.ReadFull(s.r, payload); err != nil {
-		if errors.Is(err, io.ErrUnexpectedEOF) {
-			return io.EOF
-		}
-		return err
+	// Grow with the bytes that arrive, not the size the header claims.
+	var payload strings.Builder
+	if _, err := io.CopyN(&payload, s.r, int64(binary.BigEndian.Uint32(hdr[4:]))); err != nil {
+		return err // io.EOF on a truncated frame, which drops it as before
 	}
-	s.add(stream, string(payload))
+	s.add(stream, payload.String())
 	return nil
 }
 

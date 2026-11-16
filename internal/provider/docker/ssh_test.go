@@ -346,6 +346,43 @@ func TestSSHTransportRefusesUnpinnedHost(t *testing.T) {
 	}
 }
 
+// A host that accepts the connection and never speaks fails the dial instead
+// of holding the transport, and every later dial, forever.
+func TestSSHTransportBoundsAStalledHandshake(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close()
+		}
+	}()
+	fx := startSSH(t, "127.0.0.1:1")
+	cfg := sshConfig(fx)
+	cfg.Port = ln.Addr().(*net.TCPAddr).Port
+	tr, err := newSSHTransport(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr.timeout = 50 * time.Millisecond
+	done := make(chan error, 1)
+	go func() { _, err := tr.DialContext(context.Background()); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("dial to a silent host succeeded")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("dial to a silent host did not return")
+	}
+}
+
 func TestSSHTransportDialErrors(t *testing.T) {
 	ln, _ := net.Listen("tcp", "127.0.0.1:0")
 	port := ln.Addr().(*net.TCPAddr).Port

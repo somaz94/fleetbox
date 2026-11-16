@@ -36,6 +36,7 @@ type sshTransport struct {
 	addr    string
 	command string
 	config  *ssh.ClientConfig
+	timeout time.Duration // bounds the TCP connect and the SSH handshake, each
 
 	mu     sync.Mutex
 	client *ssh.Client
@@ -71,12 +72,12 @@ func newSSHTransport(c Config) (*sshTransport, error) {
 	return &sshTransport{
 		addr:    addr,
 		command: dockerPath + dialStdioArgs,
+		timeout: sshTimeout,
 		config: &ssh.ClientConfig{
 			User:              c.User,
 			Auth:              []ssh.AuthMethod{ssh.PublicKeys(signer)},
 			HostKeyCallback:   hostKeys,
 			HostKeyAlgorithms: pinnedFirst(hostKeys, addr),
-			Timeout:           sshTimeout,
 		},
 	}, nil
 }
@@ -152,16 +153,19 @@ func (t *sshTransport) connect(ctx context.Context) (*ssh.Client, error) {
 	if t.client != nil {
 		return t.client, nil
 	}
-	d := net.Dialer{Timeout: sshTimeout}
+	d := net.Dialer{Timeout: t.timeout}
 	nc, err := d.DialContext(ctx, "tcp", t.addr)
 	if err != nil {
 		return nil, err
 	}
+	// NewClientConn has no timeout of its own; a stalled handshake would hold t.mu for every later dial.
+	_ = nc.SetDeadline(time.Now().Add(t.timeout))
 	c, chans, reqs, err := ssh.NewClientConn(nc, t.addr, t.config)
 	if err != nil {
 		nc.Close()
 		return nil, fmt.Errorf("ssh %s: %w", t.addr, err)
 	}
+	_ = nc.SetDeadline(time.Time{})
 	t.client = ssh.NewClient(c, chans, reqs)
 	return t.client, nil
 }

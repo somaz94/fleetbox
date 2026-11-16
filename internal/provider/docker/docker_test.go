@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -561,6 +562,21 @@ func TestLogStreamTruncatedFrame(t *testing.T) {
 	s = newLogStream(io.NopCloser(io.MultiReader(strings.NewReader(string(frame(1, "x")[:8])), errReader{})), false)
 	if _, err := s.Recv(); err == nil || errors.Is(err, io.EOF) {
 		t.Fatalf("payload err = %v", err)
+	}
+}
+
+// A header claiming 4 GiB with three bytes behind it must not allocate the claim.
+func TestLogStreamDoesNotAllocateTheClaimedFrameSize(t *testing.T) {
+	body := append(frame(1, "2026-01-01T00:00:00Z complete\n"), 1, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, 'a', 'b', 'c')
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	lines := readAll(t, newLogStream(io.NopCloser(strings.NewReader(string(body))), false))
+	runtime.ReadMemStats(&after)
+	if len(lines) != 1 || lines[0].Text != "complete" {
+		t.Fatalf("lines = %+v", lines)
+	}
+	if d := after.TotalAlloc - before.TotalAlloc; d > 64<<20 {
+		t.Fatalf("allocated %d bytes for a three-byte payload", d)
 	}
 }
 
