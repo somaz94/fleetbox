@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.6.1](https://github.com/somaz94/fleetbox/compare/v0.6.0...v0.6.1) (2026-11-16)
+
+### Bug Fixes
+
+- skip stop records already past retention ([d767b12](https://github.com/somaz94/fleetbox/commit/d767b128eb5e63d55355742537acfd58883986fe))
+- retry stalled ECS reads and renew assumed-role credentials early ([c390f80](https://github.com/somaz94/fleetbox/commit/c390f8056b5de2a7d18aad7ac86b4b016e57f49b))
+- prefer the host key types pinned in known_hosts ([52781fd](https://github.com/somaz94/fleetbox/commit/52781fd99e5844b79b511d27e20bb8bd0f3bd00f))
+
+### Documentation
+
+- design pinned host key order, bounded AWS attempts and stop retention ([2635567](https://github.com/somaz94/fleetbox/commit/26355670d174e186a47dc7d1d4102bbdb2892d5b))
+
+### Chores
+
+- bump version to v0.6.1 ([568c913](https://github.com/somaz94/fleetbox/commit/568c91364c175a463105b83d5a85cba6199b5098))
+
+### Contributors
+
+- somaz
+
+<br/>
+
 ## [v0.6.0](https://github.com/somaz94/fleetbox/compare/v0.5.0...v0.6.0) (2026-11-13)
 
 ### Features
