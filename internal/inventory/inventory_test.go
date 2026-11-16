@@ -188,6 +188,23 @@ func TestEndpointKeptAcrossRefreshes(t *testing.T) {
 	}
 }
 
+// A stop already past retention is not written, or prune would delete it again
+// after every refresh.
+func TestRefreshSkipsStopsPastRetention(t *testing.T) {
+	inv := inventoryWith(apiRef)
+	old := t0.Add(-DefaultRetention - time.Hour)
+	inv.Instances = append(inv.Instances, model.Instance{Ref: model.InstanceRef{Service: apiRef, ID: "old"},
+		Status: model.StatusStopped, StoppedAt: &old, StopReason: "exited"})
+	stops := &fakeStops{}
+	pl, _ := newPoller(&fakeProvider{inv: inv}, stops, time.Minute)
+	if err := pl.Refresh(context.Background(), "prod"); err != nil {
+		t.Fatal(err)
+	}
+	if len(stops.recs) != 1 || stops.recs[0].Instance.ID != "stop" {
+		t.Fatalf("stops = %+v", stops.recs)
+	}
+}
+
 func TestRefresh(t *testing.T) {
 	fp := &fakeProvider{inv: inventoryWith(apiRef)}
 	stops := &fakeStops{}

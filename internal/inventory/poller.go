@@ -179,10 +179,13 @@ func (p *Poller) RefreshService(ctx context.Context, ref model.ServiceRef) (mode
 	return d, nil
 }
 
+// recordStops skips stops already past retention: hosts keep containers that
+// stopped long ago, and each refresh would write them again for prune to delete.
 func (p *Poller) recordStops(ctx context.Context, name string, ins []model.Instance) {
+	cutoff := p.now().Add(-p.keep)
 	var recs []model.StopRecord
 	for _, in := range ins {
-		if r, ok := model.StopRecordOf(in); ok {
+		if r, ok := model.StopRecordOf(in); ok && !r.StoppedAt.Before(cutoff) {
 			recs = append(recs, r)
 		}
 	}
