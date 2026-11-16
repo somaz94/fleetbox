@@ -1,9 +1,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -228,4 +230,21 @@ func TestOperationFallbacks(t *testing.T) {
 	// A service never seen has nothing to fall back on.
 	h.fp.svcErr = nil
 	wantError(t, h.doWith(t, "POST", "/api/v1/services/prod/web/other/restart", operator), http.StatusNotFound, ErrorErrorCodeNotFound)
+}
+
+// A caller hanging up is not a server failure, so it is not logged as one.
+func TestClassifyLogsCancellationQuietly(t *testing.T) {
+	var buf bytes.Buffer
+	s := &Server{log: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))}
+	if _, status := s.classify(fmt.Errorf("list: %w", context.Canceled)); status != http.StatusInternalServerError {
+		t.Fatalf("status = %d", status)
+	}
+	if out := buf.String(); strings.Contains(out, "level=ERROR") || !strings.Contains(out, "api request canceled") {
+		t.Fatalf("log = %q", out)
+	}
+	buf.Reset()
+	s.classify(errors.New("boom"))
+	if !strings.Contains(buf.String(), "level=ERROR") {
+		t.Fatalf("log = %q, want an error", buf.String())
+	}
 }

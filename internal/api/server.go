@@ -524,7 +524,12 @@ func toAuditEntry(e store.AuditEntry) AuditEntry {
 // logged and answered without their text.
 func (s *Server) classify(err error) (Error, int) {
 	e, status := errorFor(err)
-	if status == http.StatusInternalServerError {
+	switch {
+	case status != http.StatusInternalServerError:
+	case errors.Is(err, context.Canceled):
+		// The caller hung up; nothing failed on the server's side.
+		s.log.Debug("api request canceled", "err", err)
+	default:
 		s.log.Error("api request failed", "err", err)
 	}
 	return e, status
