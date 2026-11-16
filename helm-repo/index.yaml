@@ -2,6 +2,29 @@ apiVersion: v1
 entries:
   fleetbox:
   - apiVersion: v2
+    appVersion: v0.7.2
+    created: "2026-11-16T03:59:02.323646415Z"
+    description: Web console for containers outside Kubernetes, ECS services and Docker
+      hosts in one view
+    digest: 7c7f06d9f10a78b44e2a4f4dba851bad99f7969a726d01fd60038b4dd39cbc75
+    home: https://github.com/somaz94/fleetbox
+    keywords:
+    - ecs
+    - docker
+    - console
+    - containers
+    kubeVersion: '>=1.25.0-0'
+    maintainers:
+    - name: somaz94
+      url: https://github.com/somaz94
+    name: fleetbox
+    sources:
+    - https://github.com/somaz94/fleetbox
+    type: application
+    urls:
+    - https://somaz94.github.io/fleetbox/helm-repo/fleetbox-0.7.2.tgz
+    version: 0.7.2
+  - apiVersion: v2
     appVersion: v0.7.1
     created: "2026-11-16T03:11:09.272317072Z"
     description: Web console for containers outside Kubernetes, ECS services and Docker
@@ -185,4 +208,4 @@ entries:
     urls:
     - https://somaz94.github.io/fleetbox/helm-repo/fleetbox-0.2.0.tgz
     version: 0.2.0
-generated: "2026-11-16T03:11:09.271470981Z"
+generated: "2026-11-16T03:59:02.323088478Z"
