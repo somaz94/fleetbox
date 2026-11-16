@@ -85,7 +85,15 @@ type Provider struct {
 	operate        OperateAPI // nil without operateRoleArn
 	logs           func(region string) LogsAPI
 	followInterval time.Duration
-	taskDefs       sync.Map // task definition ARN -> *types.TaskDefinition; immutable once registered
+	taskDefs       sync.Map // task definition ARN -> []containerDef; immutable once registered
+}
+
+// containerDef is all this adapter keeps of a task definition; the rest can
+// carry credentials (environment, log driver options).
+type containerDef struct {
+	name                  string
+	healthCheck, awslogs  bool
+	group, region, prefix string
 }
 
 // New builds the adapter from the target's `ecs:` block. Credentials come from
@@ -303,11 +311,11 @@ func (p *Provider) Logs(ctx context.Context, ref model.InstanceRef, opts provide
 	if len(tasks) == 0 {
 		return nil, fmt.Errorf("task %s: %w", ref, provider.ErrNotFound)
 	}
-	td, err := p.taskDefinition(ctx, aws.ToString(tasks[0].TaskDefinitionArn))
+	defs, err := p.taskDefinition(ctx, aws.ToString(tasks[0].TaskDefinitionArn))
 	if err != nil {
 		return nil, err
 	}
-	group, region, stream, err := p.logLocation(td, opts.Container, ref.ID)
+	group, region, stream, err := p.logLocation(defs, opts.Container, ref.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -340,30 +348,28 @@ func (p *Provider) Logs(ctx context.Context, ref model.InstanceRef, opts provide
 	return newPollStream(ctx, fetch, opts.Follow, p.followInterval), nil
 }
 
-func (p *Provider) logLocation(td *types.TaskDefinition, container, taskID string) (group, region, stream string, err error) {
-	for _, cd := range td.ContainerDefinitions {
-		name := aws.ToString(cd.Name)
+func (p *Provider) logLocation(defs []containerDef, container, taskID string) (group, region, stream string, err error) {
+	for _, cd := range defs {
+		name := cd.name
 		if container != "" && name != container {
 			continue
 		}
-		lc := cd.LogConfiguration
-		if lc == nil || lc.LogDriver != types.LogDriverAwslogs {
+		if !cd.awslogs {
 			if container != "" {
 				return "", "", "", fmt.Errorf("container %q does not log to CloudWatch: %w", name, provider.ErrUnsupported)
 			}
 			continue
 		}
-		prefix := lc.Options["awslogs-stream-prefix"]
-		if prefix == "" {
+		if cd.prefix == "" {
 			// Without a prefix the stream is named after the Docker container ID,
 			// which the ECS API does not expose.
 			return "", "", "", fmt.Errorf("container %q has no awslogs-stream-prefix: %w", name, provider.ErrUnsupported)
 		}
-		region = lc.Options["awslogs-region"]
+		region = cd.region
 		if region == "" {
 			region = p.cfg.Region
 		}
-		return lc.Options["awslogs-group"], region, prefix + "/" + name + "/" + taskID, nil
+		return cd.group, region, cd.prefix + "/" + name + "/" + taskID, nil
 	}
 	if container != "" {
 		return "", "", "", fmt.Errorf("container %q: %w", container, provider.ErrNotFound)
@@ -481,9 +487,9 @@ func (p *Provider) describeTasks(ctx context.Context, cluster string, arns []str
 	return tasks, nil
 }
 
-func (p *Provider) taskDefinition(ctx context.Context, arn string) (*types.TaskDefinition, error) {
+func (p *Provider) taskDefinition(ctx context.Context, arn string) ([]containerDef, error) {
 	if v, ok := p.taskDefs.Load(arn); ok {
-		return v.(*types.TaskDefinition), nil
+		return v.([]containerDef), nil
 	}
 	out, err := p.api.DescribeTaskDefinition(ctx, &ecs.DescribeTaskDefinitionInput{TaskDefinition: &arn})
 	if err != nil {
@@ -492,8 +498,17 @@ func (p *Provider) taskDefinition(ctx context.Context, arn string) (*types.TaskD
 	if out.TaskDefinition == nil {
 		return nil, fmt.Errorf("task definition %s: %w", arn, provider.ErrNotFound)
 	}
-	p.taskDefs.Store(arn, out.TaskDefinition)
-	return out.TaskDefinition, nil
+	defs := make([]containerDef, 0, len(out.TaskDefinition.ContainerDefinitions))
+	for _, cd := range out.TaskDefinition.ContainerDefinitions {
+		d := containerDef{name: aws.ToString(cd.Name), healthCheck: cd.HealthCheck != nil}
+		if lc := cd.LogConfiguration; lc != nil && lc.LogDriver == types.LogDriverAwslogs {
+			d.awslogs = true
+			d.group, d.region, d.prefix = lc.Options["awslogs-group"], lc.Options["awslogs-region"], lc.Options["awslogs-stream-prefix"]
+		}
+		defs = append(defs, d)
+	}
+	p.taskDefs.Store(arn, defs)
+	return defs, nil
 }
 
 // instance maps a task and, for a running one, marks which containers define a
@@ -505,14 +520,14 @@ func (p *Provider) instance(ctx context.Context, cluster, service string, t type
 	if in.Status != model.StatusRunning || unreadable[arn] {
 		return in
 	}
-	td, err := p.taskDefinition(ctx, arn)
+	defs, err := p.taskDefinition(ctx, arn)
 	if err != nil {
 		unreadable[arn] = true
 		return in
 	}
-	checked := map[string]bool{}
-	for _, cd := range td.ContainerDefinitions {
-		checked[aws.ToString(cd.Name)] = cd.HealthCheck != nil
+	checked := make(map[string]bool, len(defs))
+	for _, cd := range defs {
+		checked[cd.name] = cd.healthCheck
 	}
 	for i, c := range in.Containers {
 		if v, ok := checked[c.Name]; ok {
