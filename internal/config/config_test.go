@@ -120,6 +120,7 @@ func TestParseErrors(t *testing.T) {
 		{name: "bad name", doc: "targets:\n  - name: Prod_AWS\n    provider: ecs\n    ecs: {}", want: "lowercase"},
 		{name: "missing name", doc: "targets:\n  - provider: ecs\n    ecs: {}", want: "name is required"},
 		{name: "duplicate", doc: "targets:\n  - {name: a, provider: ecs, ecs: {}}\n  - {name: a, provider: ecs, ecs: {}}", want: "duplicate name"},
+		{name: "provider block twice", doc: "targets:\n  - name: a\n    provider: ecs\n    ecs: {}\n    ecs: {}", want: "already defined"},
 		{name: "short interval", doc: "targets:\n  - {name: a, provider: ecs, interval: 1s, ecs: {}}", want: "interval must be at least"},
 		{name: "bad interval", doc: "targets:\n  - {name: a, provider: ecs, interval: soon, ecs: {}}", want: "soon"},
 		{name: "target not a mapping", doc: "targets:\n  - a", want: "must be a mapping"},

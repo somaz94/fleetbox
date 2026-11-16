@@ -176,6 +176,9 @@ func (t *Target) UnmarshalYAML(node *yaml.Node) error {
 		if c.Provider == "" || k.Value != c.Provider {
 			return fmt.Errorf("line %d: target %q: unknown key %q", k.Line, c.Name, k.Value)
 		}
+		if t.Spec.Kind != 0 {
+			return fmt.Errorf("line %d: target %q: key %q already defined", k.Line, c.Name, k.Value)
+		}
 		t.Spec = *v
 	}
 	return nil
