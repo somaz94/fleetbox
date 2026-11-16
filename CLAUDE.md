@@ -62,8 +62,10 @@ The reasoning for each is in `docs/DESIGN.md`. Changing one means changing that 
 ## Common Pitfalls
 
 - **Docker over SSH**: `golang.org/x/crypto/ssh` running `docker system dial-stdio`, never an `ssh` binary (the distroless image has none). Host keys must be pinned in `known_hosts`; trust on first use is refused. The remote shell parses the command, so `dockerPath` accepts only an absolute path of `[A-Za-z0-9._/-]`; do not loosen it to allow `sudo` or arguments.
+- **SSH host key order**: `pinnedFirst` puts the key types pinned in `known_hosts` first, as OpenSSH does. Left to x/crypto's default order, which prefers ECDSA, a host pinned only by its ed25519 key fails with a key mismatch. A host matched by an `@cert-authority` line keeps the default order.
 - **Docker Engine API**: the client in `internal/provider/docker/engine.go` uses unversioned paths so each daemon answers in its own version. Do not pin a version prefix.
 - **ECS stop history**: ECS forgets stopped tasks within hours; the poller writes them to the store on every refresh. Do not drop stopped tasks from `Inventory`.
+- **ECS HTTP timeouts**: read calls bound each attempt (`attemptTimeout`) so the SDK retries a stalled connection within the refresh. The operate client stays unbounded on purpose: a retried `UpdateService` would force a second deployment, and a slow success would be reported as a failure.
 - **OpenAPI error responses are inlined per operation**, not shared through `components/responses`: with a shared response the generator gives the first status of each operation a different Go shape, which changes whenever a status is added.
 - **A new status code needs the spec first**: the API tests validate every response against the spec, status included, and fail on an undocumented one.
 - **Not binding beyond loopback** without `auth.oidc` is enforced in `config.Validate`, and it applies to proxy mode too, which is what keeps the trusted headers sidecar-only. Do not relax it to make a deployment work.
