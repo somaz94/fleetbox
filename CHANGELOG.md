@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.7.0](https://github.com/somaz94/fleetbox/compare/v0.6.1...v0.7.0) (2026-11-16)
+
+### Features
+
+- name the log stream state plainly and show standalone services by name ([7e8c499](https://github.com/somaz94/fleetbox/commit/7e8c499ccc677e135d5101c766787a798b0ca7b0))
+- make instance logs easier to reach from the service page ([1c29f2b](https://github.com/somaz94/fleetbox/commit/1c29f2b35351a25cb477637ad2549e81f6378db8))
+
+### Documentation
+
+- note the SSH host key order and ECS timeout pitfalls ([064a7aa](https://github.com/somaz94/fleetbox/commit/064a7aa4b9dcb51f7f426cb50fdf5b00bf915340))
+
+### Chores
+
+- bump version to v0.7.0 ([559b483](https://github.com/somaz94/fleetbox/commit/559b483828bfc4d02eda1e3044d09f3c92d9fcf6))
+
+### Contributors
+
+- somaz
+
+<br/>
+
 ## [v0.6.1](https://github.com/somaz94/fleetbox/compare/v0.6.0...v0.6.1) (2026-11-16)
 
 ### Bug Fixes
