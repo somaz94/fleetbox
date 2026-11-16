@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"net/http"
 	"slices"
 	"sort"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
@@ -36,6 +38,13 @@ const (
 	defaultTail           = 200
 	defaultFollowInterval = 2 * time.Second
 	sessionName           = "fleetbox"
+
+	// Assumed-role credentials are renewed this long before they expire, so a
+	// request signed just before expiry does not reach AWS with an expired token.
+	credentialsExpiryWindow = 5 * time.Minute
+	// A connect or a wait for response headers is cut off after this long and
+	// retried by the SDK, so a stalled connection costs one attempt, not the refresh.
+	attemptTimeout = 10 * time.Second
 )
 
 func init() { provider.Register(Kind, New) }
@@ -90,13 +99,14 @@ func New(t config.Target) (provider.Provider, error) {
 	if c.Region == "" {
 		return nil, errors.New("ecs: region is required")
 	}
-	base, err := awsconfig.LoadDefaultConfig(context.Background(), awsconfig.WithRegion(c.Region))
+	base, err := awsconfig.LoadDefaultConfig(context.Background(), awsconfig.WithRegion(c.Region),
+		awsconfig.WithHTTPClient(httpClient(attemptTimeout)))
 	if err != nil {
 		return nil, fmt.Errorf("ecs: load AWS config: %w", err)
 	}
 	identity := base.Copy()
 	assume := func(arn string) aws.CredentialsProvider {
-		return aws.NewCredentialsCache(stscreds.NewAssumeRoleProvider(sts.NewFromConfig(identity), arn,
+		return cacheCredentials(stscreds.NewAssumeRoleProvider(sts.NewFromConfig(identity), arn,
 			func(o *stscreds.AssumeRoleOptions) { o.RoleSessionName = sessionName }))
 	}
 	if c.ReadRoleArn != "" {
@@ -120,9 +130,22 @@ func New(t config.Target) (provider.Provider, error) {
 	if c.OperateRoleArn != "" {
 		oc := identity
 		oc.Credentials = assume(c.OperateRoleArn)
+		// No attempt bound: a slow UpdateService that succeeds must not be sent
+		// again (a second forced deployment) or reported as failed.
+		oc.HTTPClient = awshttp.NewBuildableClient()
 		p.WithOperateClient(ecs.NewFromConfig(oc))
 	}
 	return p, nil
+}
+
+func cacheCredentials(p aws.CredentialsProvider) *aws.CredentialsCache {
+	return aws.NewCredentialsCache(p, func(o *aws.CredentialsCacheOptions) { o.ExpiryWindow = credentialsExpiryWindow })
+}
+
+func httpClient(timeout time.Duration) *awshttp.BuildableClient {
+	return awshttp.NewBuildableClient().
+		WithDialerOptions(func(d *net.Dialer) { d.Timeout = timeout }).
+		WithTransportOptions(func(t *http.Transport) { t.ResponseHeaderTimeout = timeout })
 }
 
 // NewWithClients builds the adapter around given clients; tests pass fakes.

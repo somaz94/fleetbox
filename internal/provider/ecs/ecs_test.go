@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -871,5 +874,58 @@ func TestReadCancelledDuringTaskDefinitions(t *testing.T) {
 	p = NewWithClients("prod", Config{}, &cancelOn{fakeECS: newFake(), cancel: cancel}, nil)
 	if _, err := p.Service(ctx, apiRef); !errors.Is(err, context.Canceled) {
 		t.Fatalf("service: err = %v, want context.Canceled", err)
+	}
+}
+
+type countingCredentials struct{ calls int }
+
+func (c *countingCredentials) Retrieve(context.Context) (aws.Credentials, error) {
+	c.calls++
+	return aws.Credentials{AccessKeyID: "test-id", SecretAccessKey: "test-secret",
+		CanExpire: true, Expires: time.Now().Add(credentialsExpiryWindow / 2)}, nil
+}
+
+// Credentials inside the expiry window are renewed rather than used to sign.
+func TestCacheCredentialsRenewsBeforeExpiry(t *testing.T) {
+	src := &countingCredentials{}
+	cache := cacheCredentials(src)
+	for range 2 {
+		if _, err := cache.Retrieve(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if src.calls != 2 {
+		t.Fatalf("retrieved %d times, want 2", src.calls)
+	}
+}
+
+// A stalled attempt is cut off and retried instead of using the whole refresh.
+func TestHTTPClientRetriesAStalledAttempt(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The server notices the client hanging up only once the body is read.
+		_, _ = io.Copy(io.Discard, r.Body)
+		if hits.Add(1) == 1 {
+			select {
+			case <-r.Context().Done():
+			case <-time.After(5 * time.Second):
+			}
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-amz-json-1.1")
+		_, _ = io.WriteString(w, `{"clusterArns":[]}`)
+	}))
+	defer srv.Close()
+
+	client := ecs.New(ecs.Options{Region: "eu-central-1", BaseEndpoint: aws.String(srv.URL),
+		Credentials: aws.AnonymousCredentials{}, HTTPClient: httpClient(200 * time.Millisecond)})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := client.ListClusters(ctx, &ecs.ListClustersInput{}); err != nil {
+		t.Fatal(err)
+	}
+	// At least 2: under load the retry itself may also outrun the short bound.
+	if n := hits.Load(); n < 2 {
+		t.Fatalf("attempts = %d, want a retry after the stalled one", n)
 	}
 }
