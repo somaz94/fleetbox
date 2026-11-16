@@ -14,6 +14,10 @@ test("shows the service, its instances, stops and events", async () => {
     "href",
     "/services/prod-aws/web/api/instances/0123456789abcdef0123/logs",
   );
+  // A single instance also gets a Logs button beside the service's actions.
+  const logs = screen.getAllByRole("link", { name: "Logs" });
+  expect(logs).toHaveLength(2);
+  expect(logs[0]).toHaveAttribute("href", "/services/prod-aws/web/api/instances/0123456789abcdef0123/logs");
   expect(screen.getByText("1 of 2")).toBeInTheDocument();
   expect(screen.getByText("fleetbox.io/app=api")).toBeInTheDocument();
   expect(screen.getByText("OutOfMemoryError")).toBeInTheDocument();
@@ -126,4 +130,18 @@ test("shows a stopped standalone container with its mounts and addresses", async
   // An instance with nothing beyond its status gets no details row.
   const bare = screen.getByTitle("bbbbbbbbbbbb").closest("tr")!;
   expect(bare.nextElementSibling).toBeNull();
+});
+
+test("with several instances the logs are reached from each row only", async () => {
+  const [first] = detail.instances;
+  server.use(
+    http.get("/services/{target}/{scope}/{service}", ({ response }) =>
+      response(200).json({ ...detail, instances: [first!, { ...first!, id: "fedcba9876543210fedc" }] }),
+    ),
+  );
+  renderAt("/services/prod-aws/web/api");
+  await screen.findByTitle("fedcba9876543210fedc");
+  const logs = screen.getAllByRole("link", { name: "Logs" });
+  expect(logs).toHaveLength(2);
+  for (const link of logs) expect(link.closest("tr")).not.toBeNull();
 });

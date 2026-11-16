@@ -4,7 +4,7 @@ import { errorMessage, QueryState } from "@/components/QueryState";
 import { ServiceName } from "@/components/ServiceName";
 import { Ago, InstanceStatusBadge, ServiceStatusBadge, SeverityBadge } from "@/components/status";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -26,6 +26,7 @@ export function ServiceDetail() {
   const refresh = useRefresh(key);
   const target = useTargets().data?.find((t) => t.name === key.target);
   const [done, setDone] = useState<string>();
+  const onlyInstance = detail.data?.instances.length === 1 ? detail.data.instances[0] : undefined;
 
   return (
     <div className="flex flex-col gap-6">
@@ -40,6 +41,11 @@ export function ServiceDetail() {
           <Button variant="outline" size="sm" disabled={refresh.isPending} onClick={() => refresh.mutate()}>
             {refresh.isPending ? "Refreshing…" : "Refresh"}
           </Button>
+          {onlyInstance && target?.capabilities.logs && (
+            <Link className={buttonVariants({ variant: "outline", size: "sm" })} to={logsHref(key, onlyInstance.id)}>
+              Logs
+            </Link>
+          )}
           {detail.data && <Operations serviceKey={key} desired={detail.data.service.desired} onDone={setDone} />}
         </div>
       </div>
@@ -339,7 +345,7 @@ function Instances({ serviceKey, instances, logs }: { serviceKey: ServiceKey; in
                     <TableCell>{i.restarts ?? ""}</TableCell>
                     {logs && (
                       <TableCell>
-                        <Link className="text-sm hover:underline" to={logsHref(serviceKey, i.id)}>
+                        <Link className={buttonVariants({ variant: "outline", size: "sm" })} to={logsHref(serviceKey, i.id)}>
                           Logs
                         </Link>
                       </TableCell>
