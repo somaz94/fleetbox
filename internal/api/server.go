@@ -105,7 +105,7 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			return
 		}
 		if err != nil {
-			s.log.Error("authenticate", "err", err)
+			s.logFailure(r.Context(), slog.LevelError, "authenticate", err)
 			writeError(w, http.StatusInternalServerError, ErrorErrorCodeInternal, "internal error")
 			return
 		}
@@ -274,8 +274,12 @@ func (s *Server) operate(ctx context.Context, ref model.ServiceRef, op operation
 	entry := store.AuditEntry{Time: time.Now(), User: p.User, Subject: p.Subject, Service: ref, Action: op.action, Params: op.params}
 	if refusal := s.refusal(p, t, op); refusal != nil {
 		entry.Result, entry.Error = store.ResultDenied, auditText(refusal)
-		if _, err := s.audit.AppendAudit(ctx, entry); err != nil {
-			s.log.Error("audit a refused operation", "service", ref.String(), "action", op.action, "err", err)
+		// Detached: a refusal stays on record even when the caller hangs up at once.
+		if err := detached(ctx, auditTimeout, func(ctx context.Context) error {
+			_, err := s.audit.AppendAudit(ctx, entry)
+			return err
+		}); err != nil {
+			s.logFailure(ctx, slog.LevelError, "audit a refused operation", err, "service", ref.String(), "action", op.action)
 		}
 		return core.DetailView{}, refusal
 	}
@@ -286,22 +290,35 @@ func (s *Server) operate(ctx context.Context, ref model.ServiceRef, op operation
 	if err != nil {
 		return core.DetailView{}, fmt.Errorf("audit before %s: %w", op.action, err)
 	}
-	runCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), operationTimeout)
-	runErr := op.run(runCtx)
-	cancel()
+	runErr := detached(ctx, operationTimeout, op.run)
 	result, text := store.ResultOK, ""
 	if runErr != nil {
 		result, text = store.ResultError, auditText(runErr)
 	}
-	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), auditTimeout)
-	if err := s.audit.FinishAudit(auditCtx, id, result, text); err != nil {
+	if err := detached(ctx, auditTimeout, func(ctx context.Context) error {
+		return s.audit.FinishAudit(ctx, id, result, text)
+	}); err != nil {
 		s.log.Error("audit the outcome of an operation", "id", id, "result", result, "err", err)
 	}
-	cancel()
 	if runErr != nil {
 		return core.DetailView{}, runErr
 	}
 	return s.settled(ctx, ref, prior, priorErr)
+}
+
+// detached runs f past the caller's cancellation, bounded by d.
+func detached(ctx context.Context, d time.Duration, f func(context.Context) error) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), d)
+	defer cancel()
+	return f(ctx)
+}
+
+// logFailure logs err at level, or at Debug when the caller hung up.
+func (s *Server) logFailure(ctx context.Context, level slog.Level, msg string, err error, args ...any) {
+	if errors.Is(err, context.Canceled) {
+		level = slog.LevelDebug
+	}
+	s.log.Log(ctx, level, msg, append(args, "err", err)...)
 }
 
 // refusal returns why the caller may not run op on t, checked in the order
@@ -328,7 +345,7 @@ func (s *Server) settled(ctx context.Context, ref model.ServiceRef, prior core.D
 	if err == nil {
 		return d, nil
 	}
-	s.log.Warn("read after operation", "service", ref.String(), "err", err)
+	s.logFailure(ctx, slog.LevelWarn, "read after operation", err, "service", ref.String())
 	if d, err := s.core.Service(ctx, ref); err == nil {
 		return d, nil
 	}

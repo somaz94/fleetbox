@@ -118,9 +118,9 @@ func (p *Poller) loop(ctx context.Context, t Target) {
 func (p *Poller) watch(ctx context.Context, name string, w provider.Watcher, trigger chan<- struct{}) {
 	for {
 		ch, err := w.Watch(ctx)
-		if err != nil {
+		if err != nil && ctx.Err() == nil {
 			p.log.Warn("watch failed", "target", name, "err", err)
-		} else {
+		} else if err == nil {
 			for range ch {
 				select {
 				case trigger <- struct{}{}:
@@ -189,7 +189,8 @@ func (p *Poller) recordStops(ctx context.Context, name string, ins []model.Insta
 			recs = append(recs, r)
 		}
 	}
-	if _, err := p.stops.RecordStops(ctx, recs); err != nil {
+	// Stops already read outlive a caller that hung up; the write is local and short.
+	if _, err := p.stops.RecordStops(context.WithoutCancel(ctx), recs); err != nil {
 		p.log.Error("record stops failed", "target", name, "err", err)
 	}
 }

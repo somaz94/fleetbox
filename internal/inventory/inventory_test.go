@@ -101,11 +101,15 @@ type fakeStops struct {
 	pruneErr error
 }
 
-func (s *fakeStops) RecordStops(_ context.Context, recs []model.StopRecord) (int, error) {
+func (s *fakeStops) RecordStops(ctx context.Context, recs []model.StopRecord) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.err != nil {
 		return 0, s.err
+	}
+	// Like the SQLite store, a write on a cancelled context fails.
+	if err := ctx.Err(); err != nil {
+		return 0, err
 	}
 	s.recs = append(s.recs, recs...)
 	return len(recs), nil
@@ -368,4 +372,18 @@ func TestRunWatches(t *testing.T) {
 
 	cancel()
 	<-done
+}
+
+// Stops already read are kept even when the caller hangs up before the write.
+func TestRecordStopsAfterHangUp(t *testing.T) {
+	inv := inventoryWith(apiRef)
+	fp := &fakeProvider{inv: inv}
+	stops := &fakeStops{}
+	pl, _ := newPoller(fp, stops, time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	pl.recordStops(ctx, "prod", inv.Instances)
+	if len(stops.recs) != 1 || stops.recs[0].Instance.ID != "stop" {
+		t.Fatalf("stops = %+v", stops.recs)
+	}
 }

@@ -248,3 +248,31 @@ func TestClassifyLogsCancellationQuietly(t *testing.T) {
 		t.Fatalf("log = %q, want an error", buf.String())
 	}
 }
+
+// A refusal is recorded even when the caller has already hung up.
+func TestRefusalAuditedAfterHangUp(t *testing.T) {
+	h := newOpsHarness(t, proxyAuth)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest("POST", "http://127.0.0.1:8080"+restartPath, nil).WithContext(ctx)
+	req.Header = viewer.Clone()
+	h.h.ServeHTTP(httptest.NewRecorder(), req)
+	if got := results(t, h, operator); len(got) != 1 || !strings.HasPrefix(got[0], "vic restart denied") {
+		t.Fatalf("audit = %q", got)
+	}
+}
+
+// A caller hanging up drops any failure log to Debug; other errors keep their level.
+func TestLogFailure(t *testing.T) {
+	var buf bytes.Buffer
+	s := &Server{log: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))}
+	s.logFailure(context.Background(), slog.LevelWarn, "x", fmt.Errorf("y: %w", context.Canceled))
+	if !strings.Contains(buf.String(), "level=DEBUG") {
+		t.Fatalf("log = %q", buf.String())
+	}
+	buf.Reset()
+	s.logFailure(context.Background(), slog.LevelWarn, "x", errors.New("boom"), "k", "v")
+	if out := buf.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "k=v") {
+		t.Fatalf("log = %q", out)
+	}
+}
