@@ -3,8 +3,11 @@ package docker
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"encoding/pem"
 	"errors"
 	"io"
@@ -50,8 +53,9 @@ func newSigner(t *testing.T) (ssh.Signer, ed25519.PrivateKey) {
 }
 
 // startSSH runs an SSH server that accepts one user and key and answers
-// `docker system dial-stdio` by proxying to backend.
-func startSSH(t *testing.T, backend string) *sshFixture {
+// `docker system dial-stdio` by proxying to backend. Only its ed25519 host key
+// is pinned; any further host keys it offers (unpinned) are not.
+func startSSH(t *testing.T, backend string, unpinned ...ssh.Signer) *sshFixture {
 	t.Helper()
 	dir := t.TempDir()
 	hostSigner, _ := newSigner(t)
@@ -74,6 +78,9 @@ func startSSH(t *testing.T, backend string) *sshFixture {
 		return nil, errors.New("denied")
 	}}
 	cfg.AddHostKey(hostSigner)
+	for _, s := range unpinned {
+		cfg.AddHostKey(s)
+	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -219,6 +226,98 @@ func TestSSHTransportRunsTheConfiguredDockerPath(t *testing.T) {
 	}
 	if cmd := <-fx.execs; cmd != "/usr/local/bin/docker system dial-stdio" {
 		t.Fatalf("exec = %q", cmd)
+	}
+}
+
+// A host offering an ECDSA key next to its pinned ed25519 one is accepted:
+// x/crypto would otherwise negotiate the unpinned ECDSA key and refuse it.
+func TestSSHTransportPrefersThePinnedKeyType(t *testing.T) {
+	srv := httptest.NewServer(newDaemon().handler())
+	defer srv.Close()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ecdsaSigner, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fx := startSSH(t, strings.TrimPrefix(srv.URL, "http://"), ecdsaSigner)
+
+	tr, err := newSSHTransport(sshConfig(fx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Close()
+	if _, err := NewWithDialer("host1", tr).Inventory(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// x/crypto's own order still picks the unpinned ECDSA key; when this fails,
+	// that changed and pinnedFirst may no longer be needed.
+	def, err := newSSHTransport(sshConfig(fx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer def.Close()
+	def.config.HostKeyAlgorithms = nil
+	var keyErr *knownhosts.KeyError
+	if _, err := def.DialContext(context.Background()); !errors.As(err, &keyErr) {
+		t.Fatalf("default order: err = %v, want a knownhosts.KeyError", err)
+	}
+}
+
+func TestPinnedFirst(t *testing.T) {
+	ed, _ := newSigner(t)
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rsaSigner, err := ssh.NewSignerFromKey(rsaKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "known_hosts")
+	ca, _ := newSigner(t)
+	lines := knownhosts.Line([]string{"192.0.2.10:22"}, ed.PublicKey()) + "\n" +
+		knownhosts.Line([]string{"192.0.2.11:22"}, rsaSigner.PublicKey()) + "\n" +
+		"@cert-authority " + knownhosts.Line([]string{"192.0.2.13:22"}, ca.PublicKey()) + "\n" +
+		knownhosts.HashHostname("192.0.2.14") + " " + string(ssh.MarshalAuthorizedKey(ed.PublicKey()))
+	if err := os.WriteFile(file, []byte(lines), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hostKeys, err := knownhosts.New(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	all := len(ssh.SupportedAlgorithms().HostKeys) + len(ssh.InsecureAlgorithms().HostKeys)
+	got := pinnedFirst(hostKeys, "192.0.2.10:22")
+	if len(got) != all || got[0] != ssh.KeyAlgoED25519 || slices.Contains(got[1:], ssh.KeyAlgoED25519) {
+		t.Fatalf("ed25519 host: %v", got)
+	}
+	// An RSA key is verified by the SHA-2 signature algorithms first, SHA-1 last.
+	got = pinnedFirst(hostKeys, "192.0.2.11:22")
+	if want := []string{ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSA}; !slices.Equal(got[:3], want) || len(got) != all {
+		t.Fatalf("rsa host: %v", got)
+	}
+	if got := pinnedFirst(hostKeys, "192.0.2.12:22"); got != nil {
+		t.Fatalf("unknown host: %v, want the default order", got)
+	}
+	// A host vouched for by a CA keeps x/crypto's certificate-first default.
+	if got := pinnedFirst(hostKeys, "192.0.2.13:22"); got != nil {
+		t.Fatalf("CA host: %v, want the default order", got)
+	}
+	if got := pinnedFirst(hostKeys, "192.0.2.14:22"); len(got) == 0 || got[0] != ssh.KeyAlgoED25519 {
+		t.Fatalf("hashed host: %v", got)
+	}
+	if isCertAuthority(knownhosts.KnownKey{Filename: file + "-missing", Line: 1}) ||
+		isCertAuthority(knownhosts.KnownKey{Filename: file, Line: 99}) {
+		t.Fatal("a missing file or line counted as a CA")
+	}
+	var k placeholderKey
+	if k.Verify(nil, nil) == nil {
+		t.Fatal("the placeholder key verified a signature")
 	}
 }
 

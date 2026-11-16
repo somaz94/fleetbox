@@ -8,7 +8,9 @@ import (
 	"net"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -65,16 +67,66 @@ func newSSHTransport(c Config) (*sshTransport, error) {
 	if port == 0 {
 		port = 22
 	}
+	addr := net.JoinHostPort(c.Host, strconv.Itoa(port))
 	return &sshTransport{
-		addr:    net.JoinHostPort(c.Host, strconv.Itoa(port)),
+		addr:    addr,
 		command: dockerPath + dialStdioArgs,
 		config: &ssh.ClientConfig{
-			User:            c.User,
-			Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-			HostKeyCallback: hostKeys,
-			Timeout:         sshTimeout,
+			User:              c.User,
+			Auth:              []ssh.AuthMethod{ssh.PublicKeys(signer)},
+			HostKeyCallback:   hostKeys,
+			HostKeyAlgorithms: pinnedFirst(hostKeys, addr),
+			Timeout:           sshTimeout,
 		},
 	}, nil
+}
+
+// placeholderKey matches no known_hosts line, so checking it lists the keys
+// pinned for a host.
+type placeholderKey struct{}
+
+func (placeholderKey) Type() string                        { return "fleetbox-placeholder" }
+func (placeholderKey) Marshal() []byte                     { return []byte("fleetbox-placeholder") }
+func (placeholderKey) Verify([]byte, *ssh.Signature) error { return errors.New("placeholder key") }
+
+// pinnedFirst orders the host key algorithms so the key types pinned for addr
+// come first, as OpenSSH does. Left to its default, x/crypto prefers ECDSA and
+// fails with a key mismatch on a host whose ECDSA key is not pinned. Nil, the
+// certificate-first default, when nothing is pinned for addr or an
+// @cert-authority line vouches for it.
+func pinnedFirst(hostKeys ssh.HostKeyCallback, addr string) []string {
+	var keyErr *knownhosts.KeyError
+	if err := hostKeys(addr, &net.TCPAddr{}, placeholderKey{}); !errors.As(err, &keyErr) || len(keyErr.Want) == 0 {
+		return nil
+	}
+	pinned := map[string]bool{}
+	for _, k := range keyErr.Want {
+		if isCertAuthority(k) {
+			return nil
+		}
+		pinned[k.Key.Type()] = true
+	}
+	isPinned := func(algo string) bool {
+		switch algo {
+		case ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSASHA512:
+			algo = ssh.KeyAlgoRSA
+		}
+		return pinned[algo]
+	}
+	all := slices.Concat(ssh.SupportedAlgorithms().HostKeys, ssh.InsecureAlgorithms().HostKeys)
+	first := slices.DeleteFunc(slices.Clone(all), func(a string) bool { return !isPinned(a) })
+	return append(first, slices.DeleteFunc(all, isPinned)...)
+}
+
+// isCertAuthority reports whether k comes from an @cert-authority line, which
+// KeyError.Want lists alongside plain host keys without saying so.
+func isCertAuthority(k knownhosts.KnownKey) bool {
+	data, err := os.ReadFile(k.Filename)
+	if err != nil {
+		return false
+	}
+	lines := strings.Split(string(data), "\n")
+	return k.Line >= 1 && k.Line <= len(lines) && strings.HasPrefix(strings.TrimSpace(lines[k.Line-1]), "@cert-authority")
 }
 
 func (t *sshTransport) DialContext(ctx context.Context) (net.Conn, error) {
