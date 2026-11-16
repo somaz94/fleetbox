@@ -143,7 +143,9 @@ Tasks started outside a service (`RunTask`) are not listed. A container whose aw
 
 ECS keeps stopped tasks visible only for a short time. The poller records every stopped task's reason into the store, so "why did this stop" still answers after ECS has forgotten.
 
-A target covers every cluster in its region unless `clusters` names a subset. Each target assumes a role. Read and operate are separate roles: a target configured without `operateRoleArn` cannot be operated, whatever the user's role. The operate role needs `ecs:UpdateService`; both roles are assumed from the server's own identity, never one from the other.
+A target covers every cluster in its region unless `clusters` names a subset. Each target assumes a role. Read and operate are separate roles: a target configured without `operateRoleArn` cannot be operated, whatever the user's role. The operate role needs `ecs:UpdateService`; both roles are assumed from the server's own identity, never one from the other. Assumed-role credentials are renewed a margin before they expire (`credentialsExpiryWindow`), so a request signed just before expiry does not reach AWS with an expired token.
+
+Each AWS request attempt has a bound (`attemptTimeout`) on connecting and on receiving response headers, well inside the default interval; past it the SDK retries the attempt. A stalled connection then costs one attempt rather than the whole refresh, which is bounded by the target's interval. Calls made with the operate role have no such bound, so a slow `UpdateService` that succeeds is neither sent twice nor reported as failed.
 
 ### Docker
 
@@ -163,7 +165,7 @@ A target covers every cluster in its region unless `clusters` names a subset. Ea
 
 Transport is an interface inside the provider:
 
-- **ssh** (first release): connects with `golang.org/x/crypto/ssh` and runs `docker system dial-stdio` on the host. It does not shell out to an `ssh` binary, which the distroless image does not have. A host key must be pinned through `known_hosts`; a target without one is refused rather than trusted on first use. `dockerPath` names the CLI when it is not on the PATH of a non-interactive session, as on NAS appliances that install it under `/usr/local/bin`; it must be an absolute path of letters, digits and `._/-`, because the remote shell parses it.
+- **ssh** (first release): connects with `golang.org/x/crypto/ssh` and runs `docker system dial-stdio` on the host. It does not shell out to an `ssh` binary, which the distroless image does not have. A host key must be pinned through `known_hosts`; a target without one is refused rather than trusted on first use. As OpenSSH does, the client prefers the host key algorithms of the key types pinned for the host, so a host that also offers an unpinned type is accepted on the pinned one; left to its default, x/crypto prefers ECDSA and would refuse a host pinned only by its ed25519 key. A host vouched for by an `@cert-authority` line keeps the certificate-first default. `dockerPath` names the CLI when it is not on the PATH of a non-interactive session, as on NAS appliances that install it under `/usr/local/bin`; it must be an absolute path of letters, digits and `._/-`, because the remote shell parses it.
 - **agent** (later): a small `fleetbox-agent` on the host dials out to the console and exposes only the operations fleetbox uses. No inbound port, and the console no longer holds a credential equal to root on the host.
 
 Access to the Docker API is root on that host, which is why targets default to read-only and why the agent transport exists.
@@ -174,7 +176,7 @@ Access to the Docker API is root on that host, which is why targets default to r
 
 - **Poller**: one loop per target, interval configurable per target, each refresh bounded by that interval. ECS targets poll; Docker targets also subscribe to events, refreshing once per burst of changes, and the interval remains as a safety net.
 - **Cache**: an in-memory snapshot per target, replaced atomically. A target whose last refresh failed keeps its previous snapshot, marked stale with the error and the time of the last success.
-- **Store** (SQLite through `modernc.org/sqlite`, no cgo): audit log, stopped-instance history, login sessions, and findings with their open and resolve transitions. Behind a `Store` interface.
+- **Store** (SQLite through `modernc.org/sqlite`, no cgo): audit log, stopped-instance history, login sessions, and findings with their open and resolve transitions. Behind a `Store` interface. Stop history is kept for a fixed retention (`inventory.DefaultRetention`); a stop already older than that is not recorded, since hosts keep containers that stopped long ago and the hourly prune would delete them again after every refresh.
 - **Partial failure**: one unreachable target never fails a list. It appears as a stale or errored target and every other target still renders.
 
 <br/>
