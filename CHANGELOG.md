@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.7.2](https://github.com/somaz94/fleetbox/compare/v0.7.1...v0.7.2) (2026-11-16)
+
+### Bug Fixes
+
+- reject a target that repeats its provider block ([ad2dd8a](https://github.com/somaz94/fleetbox/commit/ad2dd8ae8a2093caabea95dcdca035a6c45de754))
+- keep refusal audits and read stops when the caller hangs up ([8c56e60](https://github.com/somaz94/fleetbox/commit/8c56e60157e203860358b75248f85da56486cce8))
+- keep only the container fields of ECS task definitions ([a22ce27](https://github.com/somaz94/fleetbox/commit/a22ce27296d2be8042554b273368fb67287325f6))
+- bound the SSH handshake and the Docker log frame allocation ([8128767](https://github.com/somaz94/fleetbox/commit/8128767b308d4732dbc3cfe300b623b5e745a486))
+
+### Chores
+
+- bump version to v0.7.2 ([8de12d8](https://github.com/somaz94/fleetbox/commit/8de12d850c91f316ab64b2d891ba1b15f1ed8690))
+
+### Contributors
+
+- somaz
+
+<br/>
+
 ## [v0.7.1](https://github.com/somaz94/fleetbox/compare/v0.7.0...v0.7.1) (2026-11-16)
 
 ### Bug Fixes
