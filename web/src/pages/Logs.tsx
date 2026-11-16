@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
+import { ServiceName } from "@/components/ServiceName";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { NativeSelect } from "@/components/ui/input";
-import { logsURL, useLogStream, type LogOptions } from "@/hooks/useLogStream";
+import { logsURL, useLogStream, type LogOptions, type StreamState } from "@/hooks/useLogStream";
 import { shortID } from "@/lib/format";
 import { useService, useTargets } from "@/lib/queries";
 import { serviceHref } from "@/pages/links";
@@ -46,7 +47,7 @@ export function Logs() {
     <div className="flex flex-col gap-4">
       <h1 className="text-xl font-semibold">
         <Link to={serviceHref({ target: key.target, scope: key.scope, name: key.service })} className="text-muted-foreground hover:underline">
-          {key.target}/{key.scope}/{key.service}
+          <ServiceName serviceRef={{ target: key.target, scope: key.scope, name: key.service }} />
         </Link>{" "}
         / <span className="font-mono" title={instance}>{shortID(instance)}</span> logs
       </h1>
@@ -74,7 +75,7 @@ export function Logs() {
             Follow
           </label>
         )}
-        <StreamBadge state={state} />
+        <StreamBadge state={state} follow={opts.follow} />
         {state === "failed" && (
           <Button variant="outline" size="sm" onClick={() => setGeneration((g) => g + 1)}>
             Reconnect
@@ -87,7 +88,11 @@ export function Logs() {
         </p>
       )}
       <div className="max-h-[70vh] overflow-auto rounded-lg border bg-muted/40 p-3 font-mono text-xs" aria-label="Log output">
-        {lines.length === 0 && state !== "connecting" && <p className="text-muted-foreground">No output.</p>}
+        {lines.length === 0 && state !== "connecting" && (
+          <p className="text-muted-foreground">
+            {state === "open" && opts.follow ? "No output yet. The stream is live and waiting for new lines." : "No output."}
+          </p>
+        )}
         {lines.map((l, n) => (
           // Log lines are untrusted: rendered as text, never as HTML.
           <div key={n} className="flex gap-3 whitespace-pre-wrap break-all">
@@ -101,7 +106,9 @@ export function Logs() {
   );
 }
 
-function StreamBadge({ state }: { state: string }) {
+const streamLabels: Record<StreamState, string> = { connecting: "connecting", open: "loading", ended: "ended", failed: "disconnected" };
+
+function StreamBadge({ state, follow }: { state: StreamState; follow: boolean }) {
   const tone = state === "open" ? "good" : state === "failed" ? "bad" : "neutral";
-  return <Badge tone={tone}>{state}</Badge>;
+  return <Badge tone={tone}>{state === "open" && follow ? "live" : streamLabels[state]}</Badge>;
 }
