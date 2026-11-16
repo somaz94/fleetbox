@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.7.1](https://github.com/somaz94/fleetbox/compare/v0.7.0...v0.7.1) (2026-11-16)
+
+### Bug Fixes
+
+- log a request the caller canceled at debug, not as a server error ([63af018](https://github.com/somaz94/fleetbox/commit/63af0183cb30a52b0adfe151e7921bc428c55246))
+
+### Chores
+
+- bump version to v0.7.1 ([c8aa3a2](https://github.com/somaz94/fleetbox/commit/c8aa3a255cad050a5d1fb30126b2d5cd801d5fbc))
+
+### Contributors
+
+- somaz
+
+<br/>
+
 ## [v0.7.0](https://github.com/somaz94/fleetbox/compare/v0.6.1...v0.7.0) (2026-11-16)
 
 ### Features
